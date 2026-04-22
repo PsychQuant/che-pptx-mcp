@@ -1,0 +1,40 @@
+# Build
+.build/
+DerivedData/
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files
+*.pptx
+*.md
+!README.md
+!README_zh-TW.md
+!CHANGELOG.md
+!CLAUDE.md
+!docs/**/*.md
+
+# MCP binary packages
+*.mcpb
+*.mcpb.zip
+
+# Secrets / tokens
+.mcpregistry_*
