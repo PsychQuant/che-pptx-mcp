@@ -4,6 +4,11 @@ import PPTXSwift
 
 /// PowerPoint MCP Server
 class PPTXMCPServer {
+    /// Single source of truth for the server's self-reported version.
+    /// MUST equal the release tag (scripts/release.sh enforces this — #1,
+    /// aligned with che-pdf-mcp#3 convention). Bump when releasing.
+    static let serverVersion = "0.1.0"
+
     private let server: Server
     private let transport: StdioTransport
 
@@ -43,7 +48,7 @@ class PPTXMCPServer {
     init() async {
         self.server = Server(
             name: "che-pptx-mcp",
-            version: "0.1.0",
+            version: Self.serverVersion,
             instructions: Self.serverInstructions,
             capabilities: .init(tools: .init())
         )
