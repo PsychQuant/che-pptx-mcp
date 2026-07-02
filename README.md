@@ -34,7 +34,7 @@ swift build -c release   # binary at .build/release/ChePPTXMCP
 scripts/release.sh <version>
 ```
 
-Pipeline：universal build → Developer ID codesign → pre-upload 簽章 gate → notarize（必須 Accepted）→ 版本同步 gate（source 常數 = release 版本）→ sha256 → `gh release create`。詳見 script header（PsychQuant/macdoc#119）。
+Pipeline：版本同步 gate（source 常數 = release 版本）→ universal build → Developer ID codesign → pre-upload 簽章 gate → notarize（必須 Accepted）→ sha256 → `gh release create`。詳見 script header（PsychQuant/macdoc#119）。
 
 ## License
 
