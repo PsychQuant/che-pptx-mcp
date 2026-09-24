@@ -120,11 +120,21 @@ struct BooleanParameterTests {
             // its fixture; create_presentation needs an explicit save), then
             // edit. If the default were `true`, this edit would autosave
             // and clear dirty; the documented default `false` leaves it dirty.
+            //
+            // The cleanup `defer` for `savePath` is declared here, at the
+            // `for absent` iteration's own scope — NOT nested inside the
+            // `if` block below — so it fires after the edit, not before it
+            // (review round 2, LOW 2: a `defer` inside the `if` would delete
+            // the file before `insert_text_shape` runs; a regression that
+            // autosaves by default would then recreate an orphan file with
+            // no cleanup left to remove it).
+            var savePath: URL?
+            defer { if let savePath { try? FileManager.default.removeItem(at: savePath) } }
             if tool == "create_presentation" {
-                let savePath = try fixtureFile()
-                defer { try? FileManager.default.removeItem(at: savePath) }
+                let path = try fixtureFile()
+                savePath = path
                 let saved = try await call("save_presentation", [
-                    "doc_id": .string(docId), "path": .string(savePath.path),
+                    "doc_id": .string(docId), "path": .string(path.path),
                 ])
                 #expect(!saved.isError, "\(saved.text)")
             }
@@ -248,5 +258,64 @@ struct BooleanParameterTests {
         let reloaded = try PptxReader.read(from: out)
         #expect(!reloaded.slides[0].getText().contains("not autosaved"),
                 "autosave=false must not have written the unsaved edit to disk")
+    }
+
+    // MARK: - Scenario: the boolean actually reaches open_presentation too
+
+    /// Review round 2, MEDIUM 1: the `create_presentation` behavioral tests
+    /// above don't prove `open_presentation`'s own `autosave` argument
+    /// actually reaches `initializeSession` — a regression that validates
+    /// the JSON type but always passes a hardcoded value at that call site
+    /// would still pass every other test in this file (including the
+    /// generic `true`/`false` acceptance test, which only checks
+    /// `!isError`). `open_presentation` already has a save path for free —
+    /// it's the fixture file it opens — so no extra `save_presentation`
+    /// step is needed before editing.
+    @Test func `autosave true on open_presentation actually persists the edit to disk`() async throws {
+        let fixture = try fixtureFile()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let docId = "bool-behavior-open-true-\(UUID().uuidString)"
+
+        let opened = try await call("open_presentation", [
+            "doc_id": .string(docId), "path": .string(fixture.path), "autosave": .bool(true),
+        ])
+        #expect(!opened.isError, "\(opened.text)")
+        #expect(server.dirtyState[docId] == false)
+
+        let edited = try await call("insert_text_shape", [
+            "doc_id": .string(docId), "slide_index": .int(0), "text": .string("open-autosaved"),
+            "x": .int(0), "y": .int(0), "width": .int(914_400), "height": .int(914_400),
+        ])
+        #expect(!edited.isError, "\(edited.text)")
+        #expect(server.dirtyState[docId] == false,
+                "autosave=true on open_presentation must clear dirty by writing back to disk after the edit")
+
+        let reloaded = try PptxReader.read(from: fixture)
+        #expect(reloaded.slides[0].getText().contains("open-autosaved"),
+                "autosave=true on open_presentation must have written the edit to the opened file")
+    }
+
+    @Test func `autosave false on open_presentation leaves edits dirty and unpersisted`() async throws {
+        let fixture = try fixtureFile()
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let docId = "bool-behavior-open-false-\(UUID().uuidString)"
+
+        let opened = try await call("open_presentation", [
+            "doc_id": .string(docId), "path": .string(fixture.path), "autosave": .bool(false),
+        ])
+        #expect(!opened.isError, "\(opened.text)")
+        #expect(server.dirtyState[docId] == false)
+
+        let edited = try await call("insert_text_shape", [
+            "doc_id": .string(docId), "slide_index": .int(0), "text": .string("open-not-autosaved"),
+            "x": .int(0), "y": .int(0), "width": .int(914_400), "height": .int(914_400),
+        ])
+        #expect(!edited.isError, "\(edited.text)")
+        #expect(server.dirtyState[docId] == true,
+                "autosave=false on open_presentation must leave the edit dirty")
+
+        let reloaded = try PptxReader.read(from: fixture)
+        #expect(!reloaded.slides[0].getText().contains("open-not-autosaved"),
+                "autosave=false on open_presentation must not have written the unsaved edit to disk")
     }
 }
