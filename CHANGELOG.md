@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 整數參數與 v0.2.0 幾何工具採同一套嚴格型別規則（#5）：只接受 JSON 數值（整數，或恰為整數的 double）。先前舊工具會把字串 `"3"` 轉成 3、把 `0.5` 截成 0；現在兩者都回傳參數錯誤。
 - EMU 參數檢查 OOXML 範圍（#5）：`insert_image`、`insert_text_shape`、`insert_table`、`set_shape_position` 的 `x`／`y` 必須在 `ST_Coordinate` 範圍內，`width`／`height`（含 `set_shape_size`）必須介於 0 與 `ST_PositiveCoordinate` 上限之間。先前越界值會被寫進檔案，PowerPoint 開啟時需要修復。
 - `add_slide` 的 `at_index` 大於投影片數時回傳錯誤，不再默默改成加在最後（#5）。
+- `slide_index` 越界時的錯誤改為指名 `slide_index` 的參數錯誤（原為不帶參數名的「索引超出範圍」），與其他整數參數一致（#5）。
+- `insert_image`、`insert_text_shape` 的 schema 不再把 `x`／`y`／`width`／`height` 列為必填，描述中註明預設值：實作一直是省略時套用預設值，schema 卻宣告必填，依 schema 驗證的 client 會拒絕 server 其實接受的呼叫（#5）。
 - `update_shape_text`、`set_shape_position`、`set_shape_size`、`set_shape_fill`、`update_cell` 缺少參數時，錯誤訊息改為指出缺少的是哪一個參數（#5）。
 
 ### Fixed
