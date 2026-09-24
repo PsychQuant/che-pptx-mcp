@@ -150,12 +150,15 @@ class PPTXMCPServer {
 
         autosaveFailure = nil
         do {
-            var result = try executeToolTask(name: name, args: args)
+            let result = try executeToolTask(name: name, args: args)
+            // An autosave failure travels as its own content item: some tools
+            // (the geometry tools) promise that their text is one JSON object.
+            var content: [Tool.Content] = [.text(result)]
             if let failure = autosaveFailure {
-                result += "\n警告：\(failure)"
+                content.append(.text("警告：\(failure)"))
                 autosaveFailure = nil
             }
-            return CallTool.Result(content: [.text(result)])
+            return CallTool.Result(content: content)
         } catch {
             return CallTool.Result(content: [.text("Error: \(error.localizedDescription)")], isError: true)
         }

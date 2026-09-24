@@ -27,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 同一類的其他 crash 一併移除（#5）：多數 session 工具未檢查 `slide_index` 是否在簡報內（陣列越界 trap），現在一律檢查；`insert_table` 的 `columns`／`rows` 為 0 或負數時會除以零或建立無效 range，現在限定 1–1000；`add_slide` 的負 `at_index` 會 trap，現在限定 0 到投影片數。
 - `update_cell` 的 `row`／`col` 與 `reorder_slides` 的 `from_index`／`to_index` 改在 server 端依實際表格與投影片數檢查，錯誤訊息指出參數名稱（#5）；`update_cell` 指向沒有表格的 graphic frame 時回傳錯誤，不再回報成功卻什麼都沒改（並把文件標成已修改）。
 - `insert_image` 的 `file_name` 與既有 media 同名時改用不重複的名稱（與 `place_picture_at` 相同），不再讓兩張圖片連到同一份 media、存檔時覆寫先前的圖片（跨模型審查發現的既有問題，PsychQuant/macdoc#90）。
-- autosave 寫檔失敗時不再清除 dirty 狀態（跨模型審查發現的既有問題，PsychQuant/macdoc#90）：先前寫入錯誤被 `try?` 吞掉、dirty 仍被清成 false，之後 `close_presentation` 會放行並丟掉唯一持有修改的 session。現在 dirty 保持 true，工具結果附上「自動存檔失敗」警告。
+- autosave 寫檔失敗時不再清除 dirty 狀態（跨模型審查發現的既有問題，PsychQuant/macdoc#90）：先前寫入錯誤被 `try?` 吞掉、dirty 仍被清成 false，之後 `close_presentation` 會放行並丟掉唯一持有修改的 session。現在 dirty 保持 true，工具結果多一個獨立的 content 項目帶「自動存檔失敗」警告（第一個項目維持原樣，幾何工具的 JSON 回應仍可解析）。
 - `delete_image` 只刪除圖片（同上，PsychQuant/macdoc#90）：先前會刪掉任何 id 相符的元素，包括文字框、表格與整個群組，並回報「已刪除圖片」。
 - `insert_text_shape`、`insert_table` 的新元素 id 改由與 `insert_image`／`place_picture_at` 相同的配置函式產生（#6）：取整棵 shape tree（含巢狀群組子元素）的最大 id 加一（至少為 2）；最大 id 已達 DrawingML `ST_DrawingElementId` 上限（`unsignedInt`，4,294,967,295）時回傳錯誤，因此不會寫出無效的 id，也不會 `Int` 溢位 trap。先前只看頂層元素，群組內已有 id=11 時新元素也會拿到 11，產生重複 id，並讓原本應被拒絕的群組子元素位址改指向新元素。
 

@@ -44,6 +44,30 @@ struct SessionSafetyTests {
         #expect(pres.slides[0].shapes.contains { $0.textBody?.getText() == "kept" })
     }
 
+    /// Review round 3, MEDIUM 1: the geometry tools promise a JSON response;
+    /// the autosave warning must not be glued onto it.
+    @Test func `A failed autosave keeps a JSON tool response parseable and warns in a separate item`() async throws {
+        let missingDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pptx-autosave-missing-\(UUID().uuidString)")
+        server.initializeSession(docId: "json", presentation: PptxWriter.createNew(),
+                                 sourcePath: missingDir.appendingPathComponent("deck.pptx").path, autosave: true)
+
+        let result = try await server.handleToolCall(CallTool.Parameters(name: "place_picture_at", arguments: [
+            "doc_id": .string("json"), "slide_index": .int(0),
+            "image_base64": .string(IntegerParameterTests.pngBase64),
+            "x_cm": .double(1), "y_cm": .double(1), "width_cm": .double(4),
+        ]))
+        #expect(result.isError != true)
+        let texts = result.content.compactMap { content -> String? in
+            if case .text(let text, _, _) = content { return text } else { return nil }
+        }
+        let first = try #require(texts.first)
+        let object = try JSONSerialization.jsonObject(with: Data(first.utf8)) as? [String: Any]
+        #expect(object?["shape_id"] as? Int == 2, "first content item must stay the tool's JSON: \(first)")
+        #expect(texts.dropFirst().contains { $0.contains("自動存檔失敗") }, "warning must arrive as its own item: \(texts)")
+        #expect(server.dirtyState["json"] == true)
+    }
+
     @Test func `A successful autosave still clears the dirty flag without a warning`() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pptx-autosave-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
