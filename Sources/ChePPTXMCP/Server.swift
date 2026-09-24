@@ -270,13 +270,13 @@ class PPTXMCPServer {
                  required: ["image_id"],
                  props: docOrSourceProps(["image_id": prop(.string, "圖片檔名")])),
             tool("insert_image", "插入圖片到指定投影片",
-                 required: ["doc_id", "slide_index", "base64", "file_name", "x", "y", "width", "height"],
+                 required: ["doc_id", "slide_index", "base64", "file_name"],
                  props: ["doc_id": prop(.string, "簡報識別碼"),
                          "slide_index": prop(.integer, "投影片索引"),
                          "base64": prop(.string, "Base64 圖片資料"),
-                         "file_name": prop(.string, "檔名"),
-                         "x": prop(.integer, "X 位置 (EMU)"), "y": prop(.integer, "Y 位置 (EMU)"),
-                         "width": prop(.integer, "寬度 (EMU)"), "height": prop(.integer, "高度 (EMU)")]),
+                         "file_name": prop(.string, "檔名（與既有 media 同名時自動改名）"),
+                         "x": prop(.integer, "X 位置 (EMU，預設 0)"), "y": prop(.integer, "Y 位置 (EMU，預設 0)"),
+                         "width": prop(.integer, "寬度 (EMU，預設 3048000)"), "height": prop(.integer, "高度 (EMU，預設 2286000)")]),
             tool("delete_image", "刪除圖片",
                  required: ["doc_id", "slide_index", "shape_id"],
                  props: ["doc_id": prop(.string, "簡報識別碼"),
@@ -328,12 +328,12 @@ class PPTXMCPServer {
 
             // --- Shape Editing ---
             tool("insert_text_shape", "插入文字框",
-                 required: ["doc_id", "slide_index", "text", "x", "y", "width", "height"],
+                 required: ["doc_id", "slide_index", "text"],
                  props: ["doc_id": prop(.string, "簡報識別碼"),
                          "slide_index": prop(.integer, "投影片索引"),
                          "text": prop(.string, "文字內容"),
-                         "x": prop(.integer, "X (EMU)"), "y": prop(.integer, "Y (EMU)"),
-                         "width": prop(.integer, "寬度 (EMU)"), "height": prop(.integer, "高度 (EMU)")]),
+                         "x": prop(.integer, "X (EMU，預設 457200)"), "y": prop(.integer, "Y (EMU，預設 1600200)"),
+                         "width": prop(.integer, "寬度 (EMU，預設 8229600)"), "height": prop(.integer, "高度 (EMU，預設 1143000)")]),
             tool("update_shape_text", "更新形狀文字",
                  required: ["doc_id", "slide_index", "shape_id", "text"],
                  props: ["doc_id": prop(.string, "簡報識別碼"),
@@ -1136,9 +1136,7 @@ class PPTXMCPServer {
     // null both mean "not given".
 
     private func validSlideIndex(_ args: [String: Value], in pres: Presentation) throws -> Int {
-        let idx = try requiredInt(args, "slide_index")
-        guard idx >= 0 && idx < pres.slides.count else { throw PPTXError.invalidIndex(idx) }
-        return idx
+        try requiredIndex(args, "slide_index", count: pres.slides.count)
     }
 
     private func requiredShapeId(_ args: [String: Value]) throws -> Int {

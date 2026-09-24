@@ -206,8 +206,22 @@ struct IntegerParameterTests {
             args["slide_index"] = .int(bad)
             let result = try await call(tool, args)
             #expect(result.isError, "\(tool) slide_index=\(bad): \(result.text)")
+            #expect(result.text.contains("slide_index"), "\(tool) slide_index=\(bad) should name the parameter: \(result.text)")
         }
         #expect(try snapshot() == before)
+    }
+
+    @Test func `A deck with no slides rejects every slide index by name`() async throws {
+        var empty = PptxWriter.createNew()
+        empty.slides = []
+        server.initializeSession(docId: Self.docId, presentation: empty, sourcePath: nil, autosave: false)
+        for tool in ["get_slide_text", "insert_text_shape", "delete_slide", "duplicate_slide"] {
+            let result = try await call(tool, ["slide_index": .int(0), "text": .string("x")])
+            #expect(result.isError, "\(tool): \(result.text)")
+            #expect(result.text.contains("slide_index"), "\(tool): \(result.text)")
+        }
+        let reorder = try await call("reorder_slides", ["from_index": .int(0), "to_index": .int(0)])
+        #expect(reorder.isError && reorder.text.contains("from_index"), "\(reorder.text)")
     }
 
     @Test func `insert_table needs between 1 and 1000 columns and rows`() async throws {
@@ -230,25 +244,37 @@ struct IntegerParameterTests {
         #expect(!result.isError, "\(result.text)")
     }
 
-    /// Parameters that must be present, per tool (the optional ones — EMU
-    /// geometry and `at_index` — fall back to a default when absent or null).
-    static let requiredIntegerParameters: [(tool: String, key: String)] = integerParameters.filter { pair in
-        !["x", "y", "width", "height", "at_index"].contains(pair.key)
-            || ["set_shape_position", "set_shape_size"].contains(pair.tool)
+    /// Whether the tool schema lists `key` as required for `tool`.
+    func schemaRequires(_ tool: String, _ key: String) throws -> Bool {
+        let definition = try #require(server.allTools.first { $0.name == tool })
+        guard case .object(let schema) = definition.inputSchema,
+              case .array(let required)? = schema["required"] else { return false }
+        return required.contains(.string(key))
     }
 
-    @Test(arguments: requiredIntegerParameters)
-    func `A missing or null required integer is an isError result naming it`(tool: String, key: String) async throws {
-        let before = try snapshot()
+    /// Review round 2, MEDIUM 3: the schema's `required` list is the
+    /// contract. A required integer that is missing or null is an error
+    /// naming it; an optional one falls back to its default.
+    @Test(arguments: integerParameters)
+    func `Missing or null integers follow the schema's required list`(tool: String, key: String) async throws {
+        let required = try schemaRequires(tool, key)
         for absent: Value? in [nil, .null] {
+            // A fresh clean session per probe: an optional default succeeds and edits.
+            let built = try #require(server.openPresentations[Self.docId])
+            server.initializeSession(docId: Self.docId, presentation: built, sourcePath: nil, autosave: false)
+            let before = try snapshot()
             var args = try #require(Self.validCalls[tool])
-            args[key] = absent
-            if absent == nil { args.removeValue(forKey: key) }
+            args.removeValue(forKey: key)
+            if let absent { args[key] = absent }
             let result = try await call(tool, args)
-            #expect(result.isError, "\(tool).\(key)=\(String(describing: absent)): \(result.text)")
-            #expect(result.text.contains(key), "\(result.text)")
+            if required {
+                #expect(result.isError, "\(tool).\(key) (required) = \(String(describing: absent)): \(result.text)")
+                #expect(result.text.contains(key), "\(result.text)")
+                #expect(try snapshot() == before)
+            } else {
+                #expect(!result.isError, "\(tool).\(key) (optional) = \(String(describing: absent)): \(result.text)")
+            }
         }
-        #expect(try snapshot() == before)
     }
 
     // MARK: - Review round 1, MEDIUM 3: indices checked by the server
