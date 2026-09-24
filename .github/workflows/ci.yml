@@ -6,15 +6,27 @@ name: CI
 # checks" and the release-pipeline fix in PR #3 sat for a month without a
 # single machine run of its own tests.
 #
-# Why ubuntu-latest: the harnesses replace every macOS-only tool that
-# scripts/release.sh calls (swift, codesign, xcrun, lipo, ditto, gh) with
-# fakes on PATH; the real tools they still use — bash, git, mktemp, awk,
-# sed, grep, shasum (Perl) — are all on the Ubuntu image, as is shellcheck.
+# Why ubuntu-latest for the `scripts` job: the harnesses replace every
+# macOS-only tool that scripts/release.sh calls (swift, codesign, xcrun,
+# lipo, ditto, gh) with fakes on PATH; the real tools they still use —
+# bash, git, mktemp, awk, sed, grep, shasum (Perl) — are all on the Ubuntu
+# image, as is shellcheck.
+#
+# `swift test` needs a real Swift toolchain (ImageIO / CoreGraphics), so it
+# runs in its own `swift-test` job on macos-latest instead (#10) — as of
+# 2026-09, macos-latest resolves to macOS 26 (arm64, Xcode 26.6 default),
+# which builds this package's `swift-tools-version: 5.9` package manifest
+# fine (verified: https://github.com/actions/runner-images, macOS 14 is
+# deprecated). This repo is public, so macOS runner minutes are free.
+#
+# actionlint (#10) statically checks the workflow files themselves — it
+# runs on ubuntu-latest since it needs no Swift toolchain; the pinned
+# version + sha256 checksum verification (against the upstream release's
+# own checksums file) avoids a `curl | bash` from a mutable branch ref.
 #
 # Deliberately not here: signing, notarization, `scripts/release.sh`
 # itself, and secrets. Releases stay a maintainer-run step backed by the
-# local keychain. `swift test` needs macOS (ImageIO / CoreGraphics) and is
-# out of scope for this lightweight job.
+# local keychain.
 
 on:
   push:
@@ -60,3 +72,41 @@ jobs:
             fi
           done
           exit "$failed"
+
+  swift-test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: swift build
+        run: swift build
+
+      - name: swift test
+        run: swift test
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download actionlint (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          checksums="actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl -sSLO "$base/$archive"
+          curl -sSLO "$base/$checksums"
+          grep " ${archive}\$" "$checksums" | sha256sum -c -
+          tar -xzf "$archive" actionlint
+          ./actionlint -version
+
+      - name: Lint workflow files
+        run: ./actionlint -color
