@@ -1,10 +1,24 @@
 #!/bin/bash
+# release-bin-path.sh — regression test: release.sh must not hard-code the
+# universal build product's location. Swift 6.4's build backend writes the
+# arm64+x86_64 product to .build/out/Products/Release, not the
+# .build/apple/Products/Release this script assumed; a hard-coded path
+# silently breaks step 1 ("built binary not found") the moment the
+# toolchain relocates its output again. The script must ask SwiftPM via
+# `swift build --show-bin-path` instead of guessing the layout.
+#
+# Same defect, same fix, already hit for real and landed on che-word-mcp
+# main at commit 35fd804 (v4.0.11 stopped at step 1 before any signing
+# happened). Ported here before PsychQuant/che-pptx-mcp#2 merges so the
+# isolated-worktree build this PR adds doesn't inherit the same bug.
+#
+# Refs PsychQuant/che-pptx-mcp#2, PsychQuant/che-word-mcp#195.
 
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SOURCE_SCRIPT="$ROOT/scripts/release.sh"
-TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/release-source-test.XXXXXX")
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/release-bin-path-test.XXXXXX")
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 BINARY_NAME=$(sed -n 's/^BINARY_NAME="\([^"]*\)"/\1/p' "$SOURCE_SCRIPT" | head -1)
@@ -31,7 +45,6 @@ git -C "$REPO" config user.name test
 git -C "$REPO" config user.email test@example.invalid
 git -C "$REPO" add .
 git -C "$REPO" commit -qm baseline
-BASELINE_HEAD=$(git -C "$REPO" rev-parse HEAD)
 git init -q --bare "$TEST_ROOT/origin.git"
 git -C "$REPO" remote add origin "$TEST_ROOT/origin.git"
 
@@ -41,6 +54,9 @@ if [ "${1:-}" = "ls-remote" ]; then exit 0; fi
 exec /usr/bin/git "$@"
 EOF
 
+# Simulates the Swift 6.4 build backend: the universal product lands under
+# .build/out/Products/Release (NOT .build/apple/Products/Release), and the
+# only way to learn that without hard-coding it is `--show-bin-path`.
 cat > "$FAKE_PATH/swift" <<'EOF'
 #!/bin/bash
 if [ "${1:-}" = "test" ]; then exit 0; fi
@@ -50,16 +66,6 @@ for arg in "$@"; do
         exit 0
     fi
 done
-echo swift-build >> "$EVENT_LOG"
-case "${MUTATION_MODE:-none}" in
-    file) echo changed-during-build >> source.txt ;;
-    primary) echo changed-in-primary-tree >> "$PRIMARY_REPO/source.txt" ;;
-    head)
-        echo committed-during-build >> source.txt
-        /usr/bin/git add source.txt
-        /usr/bin/git commit -qm committed-during-build
-        ;;
-esac
 mkdir -p .build/out/Products/Release
 cat > ".build/out/Products/Release/$BINARY_NAME" <<'BIN'
 #!/bin/bash
@@ -104,61 +110,22 @@ exit 1
 EOF
 chmod +x "$FAKE_PATH"/*
 
-run_release() {
-    : > "$EVENT_LOG"
-    set +e
-    (
-        cd "$REPO"
-        EVENT_LOG="$EVENT_LOG" BINARY_NAME="$BINARY_NAME" MUTATION_MODE="$1" PRIMARY_REPO="$REPO" PATH="$FAKE_PATH:$PATH" \
-            bash scripts/release.sh "$TEST_VERSION"
-    ) >"$TEST_ROOT/output-$1.log" 2>&1
-    RELEASE_RC=$?
-    set -e
-}
+: > "$EVENT_LOG"
+set +e
+(
+    cd "$REPO"
+    EVENT_LOG="$EVENT_LOG" BINARY_NAME="$BINARY_NAME" PATH="$FAKE_PATH:$PATH" \
+        bash scripts/release.sh "$TEST_VERSION"
+) >"$TEST_ROOT/output.log" 2>&1
+RC=$?
+set -e
 
-assert_no_release_side_effects() {
-    if grep -q '^codesign$\|notarytool submit\|^gh-release-create:' "$EVENT_LOG"; then
-        echo "FAIL: signing/notarization/upload ran after source drift" >&2
-        cat "$EVENT_LOG" >&2
-        exit 1
-    fi
-}
-
-run_release file
-[[ "$RELEASE_RC" -eq 3 ]] || {
-    echo "FAIL: source mutation must stop release with exit 3; got $RELEASE_RC" >&2
-    cat "$TEST_ROOT/output-file.log" >&2
-    exit 1
-}
-assert_no_release_side_effects
-grep -q 'tree changed during the build' "$TEST_ROOT/output-file.log"
-/usr/bin/git -C "$REPO" checkout -q -- source.txt
-
-run_release primary
-[[ "$RELEASE_RC" -eq 0 ]] || {
-    echo "FAIL: isolated release should ignore concurrent primary-tree edits; got $RELEASE_RC" >&2
-    cat "$TEST_ROOT/output-primary.log" >&2
-    exit 1
-}
-grep -q "^gh-release-create:.*--target $BASELINE_HEAD" "$EVENT_LOG"
-/usr/bin/git -C "$REPO" checkout -q -- source.txt
-
-run_release none
-[[ "$RELEASE_RC" -eq 0 ]] || {
-    echo "FAIL: clean release should complete in harness; got $RELEASE_RC" >&2
-    cat "$TEST_ROOT/output-none.log" >&2
+[[ "$RC" -eq 0 ]] || {
+    echo "FAIL: release.sh could not find the built binary once the toolchain's build output moved to .build/out/Products/Release; got exit $RC (hard-coded path assumption?)" >&2
+    cat "$TEST_ROOT/output.log" >&2
     exit 1
 }
 grep -q '^codesign$' "$EVENT_LOG"
-grep -q "^gh-release-create:.*--target $BASELINE_HEAD" "$EVENT_LOG"
+grep -q "^gh-release-create:" "$EVENT_LOG"
 
-run_release head
-[[ "$RELEASE_RC" -eq 3 ]] || {
-    echo "FAIL: HEAD change must stop release with exit 3; got $RELEASE_RC" >&2
-    cat "$TEST_ROOT/output-head.log" >&2
-    exit 1
-}
-assert_no_release_side_effects
-grep -q 'tree changed during the build' "$TEST_ROOT/output-head.log"
-
-echo "PASS: release refuses source/HEAD drift before signing and pins target"
+echo "PASS: release.sh resolves the binary path via 'swift build --show-bin-path' instead of a hard-coded location"
