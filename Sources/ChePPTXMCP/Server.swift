@@ -9,7 +9,7 @@ class PPTXMCPServer {
     /// Single source of truth for the server's self-reported version.
     /// MUST equal the release tag (scripts/release.sh enforces this — #1,
     /// aligned with che-pdf-mcp#3 convention). Bump when releasing.
-    static let serverVersion = "0.3.0"
+    static let serverVersion = "0.4.0"
 
     private let server: Server
     private let transport: StdioTransport

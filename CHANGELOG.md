@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-24
+
 ### Added
 
 - `open_presentation` 開啟含音訊、影片或換場音效的簡報時，回應會列出是哪幾張投影片，並說明這份簡報可以讀取但無法存檔（PsychQuant/pptx-swift#5）。之前要等到 autosave 或 `save_presentation` 失敗才會發現。
