@@ -505,10 +505,20 @@ class PPTXMCPServer {
 
     // MARK: - Session Management Tools
 
+    /// #8：重用 `doc_id` 不得蓋掉還沒存檔的 session（那也會繞過 close_presentation 的 dirty 保護）。
+    /// 乾淨的 session 維持可替換。
+    private func refuseReplacingUnsavedSession(_ docId: String) throws {
+        guard dirtyState[docId] == true else { return }
+        throw PPTXError.invalidParameter(
+            "doc_id", "doc_id「\(docId)」已有尚未存檔的修改；請先 save_presentation 或 close_presentation，或改用另一個 doc_id"
+        )
+    }
+
     private func createPresentation(args: [String: Value]) throws -> String {
         guard let docId = args["doc_id"]?.stringValue else {
             throw PPTXError.invalidParameter("doc_id", "需要 doc_id")
         }
+        try refuseReplacingUnsavedSession(docId)
         let autosave = args["autosave"]?.boolValue ?? false
         let presentation = PptxWriter.createNew()
         initializeSession(docId: docId, presentation: presentation, sourcePath: nil, autosave: autosave)
@@ -522,6 +532,7 @@ class PPTXMCPServer {
         guard let docId = args["doc_id"]?.stringValue else {
             throw PPTXError.invalidParameter("doc_id", "需要 doc_id")
         }
+        try refuseReplacingUnsavedSession(docId)
         let autosave = args["autosave"]?.boolValue ?? false
 
         let presentation = try PptxReader.read(from: URL(fileURLWithPath: path))

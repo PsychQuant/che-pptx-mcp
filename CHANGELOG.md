@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `insert_text_shape`、`insert_table` 的新元素 id 改由與 `insert_image`／`place_picture_at` 相同的配置函式產生（#6）：取整棵 shape tree（含巢狀群組子元素）的最大 id 加一（至少為 2）；最大 id 已達 DrawingML `ST_DrawingElementId` 上限（`unsignedInt`，4,294,967,295）時回傳錯誤，因此不會寫出無效的 id，也不會 `Int` 溢位 trap。先前只看頂層元素，群組內已有 id=11 時新元素也會拿到 11，產生重複 id，並讓原本應被拒絕的群組子元素位址改指向新元素。
 - pptx-swift 下限提高到 **0.3.0**：存出的檔案帶有圖片 relationship、media part 與 content type（PsychQuant/pptx-swift#1），原生比例考慮 EXIF 方向（PsychQuant/pptx-swift#2）。
 - `fit_picture_to_native_aspect` 以 `srcRect` 裁切後的可見區域計算比例（PsychQuant/pptx-swift#2）；裁切過的圖片不再變形，裁切本身不變。
+- `create_presentation`／`open_presentation` 遇到已有未存檔修改的 `doc_id` 時回傳錯誤、原 session 不變（#8）；先前會直接蓋掉，未存檔的修改消失，也繞過了 `close_presentation` 的保護。乾淨的 session 仍可替換。
 
 ## [0.2.0] - 2026-09-24
 
