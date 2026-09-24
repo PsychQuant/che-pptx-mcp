@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- 升級 pptx-swift 0.5.0（PsychQuant/pptx-swift#7）：旋轉或翻轉過的形狀、圖片、表格框與群組（`a:xfrm` 的 `rot`／`flipH`／`flipV`）存檔後保留，不再默默回到原狀。幾何工具（`set_placeholder_geometry`、`fit_picture_to_native_aspect`）只改位置與大小，不會清掉旋轉。
+
 ## [0.4.0] - 2026-09-24
 
 ### Added
