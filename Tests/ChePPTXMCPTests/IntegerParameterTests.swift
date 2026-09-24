@@ -111,13 +111,13 @@ struct IntegerParameterTests {
         return out + "\ndirty=\(String(describing: server.dirtyState[Self.docId]))"
     }
 
-    static func png() throws -> Data {
+    static func png(width: Int = 40, height: Int = 30) throws -> Data {
         let context = try #require(CGContext(
-            data: nil, width: 40, height: 30, bitsPerComponent: 8, bytesPerRow: 0,
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ))
         context.setFillColor(red: 0.2, green: 0.5, blue: 0.9, alpha: 1)
-        context.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let image = try #require(context.makeImage())
         let output = NSMutableData()
         let destination = try #require(CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil))
@@ -336,6 +336,27 @@ struct IntegerParameterTests {
             let result = try await call(tool, args)
             #expect(!result.isError, "\(tool).\(key)=\(edge): \(result.text)")
         }
+    }
+
+    // MARK: - Review round 1, HIGH 2: insert_image never reuses a media name
+
+    @Test func `insert_image with an existing file name keeps both images`() async throws {
+        let other = try Self.png(width: 30, height: 40)
+        var args = try #require(Self.validCalls["insert_image"])
+        args["file_name"] = .string("p.png")   // the fixture's picture already uses p.png
+        args["base64"] = .string(other.base64EncodedString())
+        let result = try await call("insert_image", args)
+        #expect(!result.isError, "\(result.text)")
+
+        let pres = try #require(server.openPresentations[Self.docId])
+        let names = pres.images.map(\.fileName)
+        #expect(Set(names).count == names.count, "media names must stay unique: \(names)")
+        let pictures = pres.slides[0].pictures
+        #expect(pictures.count == 2)
+        let bytes = pictures.compactMap { pres.mediaFile(for: $0)?.data }
+        #expect(bytes.count == 2)
+        #expect(bytes.first != bytes.last, "the second picture must link to its own bytes")
+        #expect(bytes.last == other)
     }
 
     // MARK: - Scenario: the values arrive as JSON
