@@ -293,6 +293,26 @@ final class GeometryToolsTests: XCTestCase {
         XCTAssertEqual(stored.sourceRect, PictureSourceRect(left: 25_000, right: 25_000), "fit 不得改動裁切")
     }
 
+    /// 左右裁切合計 100%：沒有可見區域。必須回錯，幾何與 dirty 狀態都不變。
+    func testFitOnAFullyCroppedPictureFailsWithoutTouchingTheDocument() throws {
+        var pres = PptxWriter.createNew()
+        var picture = PPTXSwift.Picture(id: 2, name: "gone.png", position: Position(x: 720000, y: 1080000),
+                                        size: Size(width: 3600000, height: 1800000),
+                                        imageRelationshipId: "rId2", mediaFileName: "gone.png")
+        picture.sourceRect = PictureSourceRect(left: 50_000, right: 50_000)
+        pres.slides[0].elements = [.picture(picture)]
+        pres.images = [MediaFile(id: "gone.png", fileName: "gone.png", data: try fourByThreePNGData())]
+        server.initializeSession(docId: "gone", presentation: pres, sourcePath: nil, autosave: false)
+        let before = try snapshot("gone")
+
+        var args = fitArgs(2, "width")
+        args["doc_id"] = .string("gone")
+        XCTAssertThrowsError(try call("fit_picture_to_native_aspect", args)) { error in
+            XCTAssertTrue("\(error)".contains("srcRect"), "錯誤要指出是裁切的問題：\(error)")
+        }
+        XCTAssertEqual(try snapshot("gone"), before)
+    }
+
     func testFitWorksOnPicturesInsertedByInsertImage() throws {
         let inserted = try call("insert_image", [
             "doc_id": .string(docId), "slide_index": .int(0),
