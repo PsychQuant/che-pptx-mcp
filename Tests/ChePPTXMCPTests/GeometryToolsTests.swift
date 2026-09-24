@@ -422,6 +422,27 @@ final class GeometryToolsTests: XCTestCase {
         XCTAssertEqual(try snapshot("maxid"), before)
     }
 
+    // MARK: - Review round 2, MEDIUM 3: fit requires positive existing extents
+
+    func testFitRejectsZeroExistingExtentsWithoutTouchingTheDocument() throws {
+        let cases: [(label: String, size: Size, anchor: String)] = [
+            ("zero width, anchor height", Size(width: 0, height: 1800000), "height"),
+            ("zero height, anchor width", Size(width: 3600000, height: 0), "width"),
+            ("zero width, anchor width", Size(width: 0, height: 1800000), "width"),
+            ("zero height, anchor height", Size(width: 3600000, height: 0), "height"),
+        ]
+        for (index, c) in cases.enumerated() {
+            let id = "zero-\(index)"
+            try installExtremePicture(docId: id, position: Position(x: 720000, y: 1080000), size: c.size)
+            let before = try snapshot(id)
+            var args = fitArgs(2, c.anchor)
+            args["doc_id"] = .string(id)
+            XCTAssertThrowsError(try call("fit_picture_to_native_aspect", args), c.label)
+            XCTAssertEqual(try snapshot(id), before, c.label)
+            XCTAssertEqual(server.dirtyState[id], false, c.label)
+        }
+    }
+
     // MARK: - Review MEDIUM 3: parameter types are validated, never coerced
 
     func testNumericParametersRejectStringsAndBooleans() throws {

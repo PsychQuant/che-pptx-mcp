@@ -1118,15 +1118,17 @@ class PPTXMCPServer {
             )
         }
 
-        // The existing transform must already be valid OOXML: fit keeps the
-        // offset and one side, and reports both.
+        // The existing transform must already be valid and non-degenerate:
+        // fit keeps the offset and one side, and reports both. A zero extent
+        // is rejected on either side, anchored or not — a picture with no
+        // width or height has no aspect to fit to.
         let range = PPTXMetric.coordinateRangeEmu
-        let extents = 0...PPTXMetric.maxCoordinateEmu
+        let extents = 1...PPTXMetric.maxCoordinateEmu
         guard range.contains(picture.position.x), range.contains(picture.position.y),
               extents.contains(picture.size.width), extents.contains(picture.size.height) else {
             throw PPTXError.invalidParameter(
                 "shape_id",
-                "圖片 id=\(shapeId) 目前的位置或大小超出 OOXML 座標範圍（pos=(\(picture.position.x),\(picture.position.y)) "
+                "圖片 id=\(shapeId) 目前的位置超出 OOXML 座標範圍或大小不為正（pos=(\(picture.position.x),\(picture.position.y)) "
                     + "size=(\(picture.size.width)×\(picture.size.height))），請先以 set_placeholder_geometry 重設"
             )
         }
