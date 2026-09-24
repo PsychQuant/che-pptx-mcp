@@ -15,6 +15,14 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "PPTXSwift", package: "pptx-swift"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "ChePPTXMCPTests",
+            dependencies: [
+                "ChePPTXMCP",
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "PPTXSwift", package: "pptx-swift"),
+            ]
+        ),
     ]
 )
