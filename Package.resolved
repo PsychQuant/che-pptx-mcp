@@ -23,8 +23,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/PsychQuant/pptx-swift.git",
       "state" : {
-        "revision" : "d390855f440fa982d88814e9aa210ea36a7a4b7b",
-        "version" : "0.2.0"
+        "revision" : "a90228c91bc4c06f712622355dc11412a4f4ffdd",
+        "version" : "0.3.0"
       }
     },
     {

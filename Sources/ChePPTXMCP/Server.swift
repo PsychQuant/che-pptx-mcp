@@ -1135,8 +1135,10 @@ class PPTXMCPServer {
         } catch PPTXError.undecodableImage(let detail) {
             throw PPTXError.undecodableImage("media '\(media.fileName)'：\(detail)")
         }
+        // pptx-swift#2：比例以 srcRect 裁切後的可見區域為準。
         let fitted = try NativeAspect.fittedSize(keeping: anchor, of: picture.size,
-                                                 pixelWidth: pixels.width, pixelHeight: pixels.height)
+                                                 pixelWidth: pixels.width, pixelHeight: pixels.height,
+                                                 crop: picture.sourceRect)
         let response = geometryResponse(
             [("shape_id", "\(shapeId)"),
              ("slide_index", "\(idx)"),
