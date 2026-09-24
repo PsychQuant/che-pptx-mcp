@@ -308,6 +308,64 @@ final class GeometryToolsTests: XCTestCase {
         XCTAssertEqual(try storedPicture(emfId).size.height, 1800000, "failed fit must not mutate")
     }
 
+    // MARK: - Review HIGH 2: validate everything before mutating
+
+    /// A session holding one 4:3 picture whose existing geometry is extreme.
+    private func installExtremePicture(docId: String, position: Position, size: Size) throws {
+        var pres = PptxWriter.createNew()
+        let picture = PPTXSwift.Picture(id: 2, name: "extreme.png", position: position, size: size,
+                                        imageRelationshipId: "rId2", mediaFileName: "extreme.png")
+        pres.slides[0].elements = [.picture(picture)]
+        pres.images = [MediaFile(id: "extreme.png", fileName: "extreme.png", data: try fourByThreePNGData())]
+        server.initializeSession(docId: docId, presentation: pres, sourcePath: nil, autosave: false)
+    }
+
+    static let extremeGeometries: [(label: String, position: Position, size: Size)] = [
+        ("x near Int.max", Position(x: Int.max - 1, y: 0), Size(width: 3600000, height: 1800000)),
+        ("y near Int.max", Position(x: 0, y: Int.max - 1), Size(width: 3600000, height: 1800000)),
+        ("x near Int.min", Position(x: Int.min + 1, y: 0), Size(width: 3600000, height: 1800000)),
+        ("x one beyond ST_Coordinate", Position(x: PPTXMetric.maxCoordinateEmu + 1, y: 0), Size(width: 3600000, height: 1800000)),
+        ("width near Int.max", Position(x: 0, y: 0), Size(width: Int.max - 1, height: 1800000)),
+        ("height near Int.max, anchored on height", Position(x: 0, y: 0), Size(width: 3600000, height: Int.max - 1)),
+    ]
+
+    func testFitOnExtremeExistingGeometryFailsWithoutTouchingTheDocument() throws {
+        for (index, c) in Self.extremeGeometries.enumerated() {
+            let id = "extreme-\(index)"
+            try installExtremePicture(docId: id, position: c.position, size: c.size)
+            let before = try snapshot(id)
+            for anchor in ["width", "height"] {
+                var args = fitArgs(2, anchor)
+                args["doc_id"] = .string(id)
+                XCTAssertThrowsError(try call("fit_picture_to_native_aspect", args), "\(c.label) / \(anchor)")
+                XCTAssertEqual(try snapshot(id), before, "\(c.label) / \(anchor): document changed")
+                XCTAssertEqual(server.dirtyState[id], false, "\(c.label) / \(anchor): marked dirty")
+            }
+        }
+    }
+
+    func testFitAtTheCoordinateLimitSucceedsWithAWarningInsteadOfTrapping() throws {
+        let edge = Position(x: PPTXMetric.maxCoordinateEmu - 3600000, y: 0)
+        try installExtremePicture(docId: "edge", position: edge, size: Size(width: 3600000, height: 1800000))
+        var args = fitArgs(2, "width")
+        args["doc_id"] = .string("edge")
+        let response = try json(call("fit_picture_to_native_aspect", args))
+        let bounds = try XCTUnwrap(response["warnings"] as? [[String: Any]]).compactMap { $0["bound"] as? String }
+        XCTAssertEqual(bounds, ["right"])
+        XCTAssertEqual(server.dirtyState["edge"], true)
+    }
+
+    func testFitAfterInsertImageWithExtremeOffsetDoesNotTrap() throws {
+        _ = try call("insert_image", [
+            "doc_id": .string(docId), "slide_index": .int(0),
+            "base64": .string(fourByThreePNG()), "file_name": .string("far.png"),
+            "x": .int(Int.max), "y": .int(0), "width": .int(3600000), "height": .int(1800000),
+        ])
+        let before = try snapshot()
+        XCTAssertThrowsError(try call("fit_picture_to_native_aspect", fitArgs(2, "width")))
+        XCTAssertEqual(try snapshot(), before)
+    }
+
     // MARK: - Helpers
 
     private func call(_ name: String, _ args: [String: Value]) throws -> String {
@@ -320,6 +378,20 @@ final class GeometryToolsTests: XCTestCase {
                                    "not JSON: \(text)")
         object["_raw"] = text
         return object
+    }
+
+    /// Full observable state of a session: the whole model tree (reflection
+    /// dump), every media part's bytes, and the dirty flag.
+    private func snapshot(_ id: String? = nil) throws -> String {
+        let id = id ?? docId
+        let pres = try XCTUnwrap(server.openPresentations[id])
+        var out = ""
+        dump(pres, to: &out)
+        for image in pres.images {
+            out += "\nmedia \(image.id) \(image.fileName) \(image.data.base64EncodedString())"
+        }
+        out += "\ndirty=\(String(describing: server.dirtyState[id]))"
+        return out
     }
 
     private func presentation() throws -> Presentation {

@@ -17,7 +17,7 @@ class PPTXMCPServer {
     /// 目前開啟的簡報 (doc_id -> Presentation)
     private(set) var openPresentations: [String: Presentation] = [:]
     private var originalPaths: [String: String] = [:]
-    private var dirtyState: [String: Bool] = [:]
+    private(set) var dirtyState: [String: Bool] = [:]
     private var autosaveState: [String: Bool] = [:]
 
     // MARK: - Server Instructions
@@ -686,31 +686,39 @@ class PPTXMCPServer {
         let w = args["width"]?.intValue ?? 3048000
         let h = args["height"]?.intValue ?? 2286000
 
-        let nextId = appendPicture(docId: docId, slideIndex: idx, data: data, fileName: fileName,
-                                   position: Position(x: x, y: y), size: Size(width: w, height: h))
+        let nextId = try nextElementId(in: openPresentations[docId]!.slides[idx])
+        appendPicture(docId: docId, slideIndex: idx, id: nextId, data: data, fileName: fileName,
+                      position: Position(x: x, y: y), size: Size(width: w, height: h))
         return "已插入圖片: \(fileName) (id=\(nextId))"
     }
 
-    /// Shared picture-insertion path (insert_image, place_picture_at): appends
-    /// the picture element and its media part, linking the two by file name.
-    private func appendPicture(docId: String, slideIndex idx: Int, data: Data, fileName: String,
-                               position: Position, size: Size) -> Int {
-        let nextId = (openPresentations[docId]?.slides[idx].elements.compactMap { el -> Int? in
+    /// One more than the largest top-level element id (at least 2); throws
+    /// instead of overflowing when an id is already `Int.max`.
+    private func nextElementId(in slide: Slide) throws -> Int {
+        let maxId = slide.elements.map { el -> Int in
             switch el {
             case .shape(let s): return s.id
             case .picture(let p): return p.id
             case .graphicFrame(let f): return f.id
             case .group(let g): return g.id
             }
-        }.max() ?? 1) + 1
+        }.max() ?? 1
+        let (next, overflow) = maxId.addingReportingOverflow(1)
+        guard !overflow else {
+            throw PPTXError.invalidParameter("shape_id", "投影片上已有 id=\(maxId) 的元素，無法再配置新 id")
+        }
+        return next
+    }
 
-        let rId = "rId\(nextId)"
-        let picture = Picture(id: nextId, name: fileName, position: position, size: size,
-                              imageRelationshipId: rId, mediaFileName: fileName)
+    /// Shared picture-insertion path (insert_image, place_picture_at): appends
+    /// the picture element and its media part, linking the two by file name.
+    private func appendPicture(docId: String, slideIndex idx: Int, id: Int, data: Data, fileName: String,
+                               position: Position, size: Size) {
+        let picture = Picture(id: id, name: fileName, position: position, size: size,
+                              imageRelationshipId: "rId\(id)", mediaFileName: fileName)
         openPresentations[docId]?.slides[idx].elements.append(.picture(picture))
         openPresentations[docId]?.images.append(MediaFile(id: fileName, fileName: fileName, data: data))
         markDirty(docId)
-        return nextId
     }
 
     private func deleteImage(args: [String: Value]) throws -> String {
@@ -993,6 +1001,11 @@ class PPTXMCPServer {
     // centimeters (Double) at the tool boundary and EMU internally; conversion,
     // validation, group rejection and aspect fitting live in PPTXSwift's
     // Geometry module. Responses are JSON carrying cm (2-decimal) + EMU.
+    //
+    // Each handler computes and validates everything that can fail — parameter
+    // types, geometry, derived sizes, the response itself — before it writes
+    // to the session and marks it dirty, so a rejected call leaves the
+    // document byte-for-byte as it was.
 
     private func setPlaceholderGeometry(args: [String: Value]) throws -> String {
         let (docId, pres) = try requireSession(args: args)
@@ -1005,16 +1018,17 @@ class PPTXMCPServer {
 
         var slide = pres.slides[idx]
         try slide.setGeometry(ofElementId: shapeId, xCm: x, yCm: y, widthCm: w, heightCm: h)
-        openPresentations[docId]?.slides[idx] = slide
-        markDirty(docId)
-
         guard let (position, size) = topLevelGeometry(of: shapeId, in: slide) else {
             throw PPTXError.invalidParameter("shape_id", "找不到形狀 id=\(shapeId)")
         }
-        return geometryResponse(
+        let response = geometryResponse(
             [("shape_id", "\(shapeId)"), ("slide_index", "\(idx)")],
             position: position, size: size, slideSize: pres.slideSize
         )
+
+        openPresentations[docId]?.slides[idx] = slide
+        markDirty(docId)
+        return response
     }
 
     private func placePictureAt(args: [String: Value]) throws -> String {
@@ -1047,8 +1061,7 @@ class PPTXMCPServer {
         }
 
         let fileName = uniqueMediaFileName(source.fileName, in: pres)
-        let shapeId = appendPicture(docId: docId, slideIndex: idx, data: source.data, fileName: fileName,
-                                    position: validated.position, size: size)
+        let shapeId = try nextElementId(in: pres.slides[idx])
 
         var fields: [(String, String)] = [
             ("shape_id", "\(shapeId)"),
@@ -1059,7 +1072,11 @@ class PPTXMCPServer {
         if let nativePixels {
             fields.append(("native_pixels", "{\"width\":\(nativePixels.width),\"height\":\(nativePixels.height)}"))
         }
-        return geometryResponse(fields, position: validated.position, size: size, slideSize: pres.slideSize)
+        let response = geometryResponse(fields, position: validated.position, size: size, slideSize: pres.slideSize)
+
+        appendPicture(docId: docId, slideIndex: idx, id: shapeId, data: source.data, fileName: fileName,
+                      position: validated.position, size: size)
+        return response
     }
 
     private func fitPictureToNativeAspect(args: [String: Value]) throws -> String {
@@ -1081,7 +1098,7 @@ class PPTXMCPServer {
         case .topLevel(let index):
             elementIndex = index
         }
-        guard case .picture(var picture) = slide.elements[elementIndex] else {
+        guard case .picture(let picture) = slide.elements[elementIndex] else {
             if case .group = slide.elements[elementIndex] {
                 throw PPTXError.groupGeometryUnsupported(shapeId: shapeId)
             }
@@ -1095,6 +1112,19 @@ class PPTXMCPServer {
             )
         }
 
+        // The existing transform must already be valid OOXML: fit keeps the
+        // offset and one side, and reports both.
+        let range = PPTXMetric.coordinateRangeEmu
+        let extents = 0...PPTXMetric.maxCoordinateEmu
+        guard range.contains(picture.position.x), range.contains(picture.position.y),
+              extents.contains(picture.size.width), extents.contains(picture.size.height) else {
+            throw PPTXError.invalidParameter(
+                "shape_id",
+                "圖片 id=\(shapeId) 目前的位置或大小超出 OOXML 座標範圍（pos=(\(picture.position.x),\(picture.position.y)) "
+                    + "size=(\(picture.size.width)×\(picture.size.height))），請先以 set_placeholder_geometry 重設"
+            )
+        }
+
         let pixels: (width: Int, height: Int)
         do {
             pixels = try NativeAspect.pixelDimensions(of: media.data)
@@ -1103,17 +1133,19 @@ class PPTXMCPServer {
         }
         let fitted = try NativeAspect.fittedSize(keeping: anchor, of: picture.size,
                                                  pixelWidth: pixels.width, pixelHeight: pixels.height)
-        picture.size = fitted
-        openPresentations[docId]?.slides[idx].elements[elementIndex] = .picture(picture)
-        markDirty(docId)
-
-        return geometryResponse(
+        let response = geometryResponse(
             [("shape_id", "\(shapeId)"),
              ("slide_index", "\(idx)"),
              ("anchor", jsonString(anchor.rawValue)),
              ("native_pixels", "{\"width\":\(pixels.width),\"height\":\(pixels.height)}")],
             position: picture.position, size: fitted, slideSize: pres.slideSize
         )
+
+        var fittedPicture = picture
+        fittedPicture.size = fitted
+        openPresentations[docId]?.slides[idx].elements[elementIndex] = .picture(fittedPicture)
+        markDirty(docId)
+        return response
     }
 
     // MARK: Geometry helpers
@@ -1232,11 +1264,13 @@ class PPTXMCPServer {
         if position.y < 0 {
             warnings.append(("top", String(format: "超出投影片上緣：y = %.2f cm < 0", position.yCm)))
         }
-        if position.x + size.width > slideSize.width {
+        // Compared in Double: exact within the OOXML range and cannot overflow
+        // whatever the stored values are.
+        if Double(position.x) + Double(size.width) > Double(slideSize.width) {
             warnings.append(("right", String(format: "超出投影片右緣：x + width = %.2f cm > 投影片寬度 %.2f cm",
                                              position.xCm + size.widthCm, slideSize.widthCm)))
         }
-        if position.y + size.height > slideSize.height {
+        if Double(position.y) + Double(size.height) > Double(slideSize.height) {
             warnings.append(("bottom", String(format: "超出投影片下緣：y + height = %.2f cm > 投影片高度 %.2f cm",
                                               position.yCm + size.heightCm, slideSize.heightCm)))
         }
