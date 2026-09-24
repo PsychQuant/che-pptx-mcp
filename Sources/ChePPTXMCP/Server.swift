@@ -1,6 +1,8 @@
 import Foundation
+import ImageIO
 import MCP
 import PPTXSwift
+import UniformTypeIdentifiers
 
 /// PowerPoint MCP Server
 class PPTXMCPServer {
@@ -13,7 +15,7 @@ class PPTXMCPServer {
     private let transport: StdioTransport
 
     /// 目前開啟的簡報 (doc_id -> Presentation)
-    private var openPresentations: [String: Presentation] = [:]
+    private(set) var openPresentations: [String: Presentation] = [:]
     private var originalPaths: [String: String] = [:]
     private var dirtyState: [String: Bool] = [:]
     private var autosaveState: [String: Bool] = [:]
@@ -23,7 +25,7 @@ class PPTXMCPServer {
     private static let serverInstructions = """
     # che-pptx-mcp — PowerPoint MCP Server
 
-    Swift-native OOXML server for .pptx manipulation. ~45 tools.
+    Swift-native OOXML server for .pptx manipulation. 40 tools.
 
     ## Two Modes of Operation
 
@@ -63,7 +65,7 @@ class PPTXMCPServer {
 
     // MARK: - Session Management
 
-    private func initializeSession(docId: String, presentation: Presentation, sourcePath: String?, autosave: Bool) {
+    func initializeSession(docId: String, presentation: Presentation, sourcePath: String?, autosave: Bool) {
         openPresentations[docId] = presentation
         originalPaths[docId] = sourcePath
         dirtyState[docId] = false
@@ -145,7 +147,7 @@ class PPTXMCPServer {
 
     // MARK: - Tool Dispatch
 
-    private func executeToolTask(name: String, args: [String: Value]) throws -> String {
+    func executeToolTask(name: String, args: [String: Value]) throws -> String {
         switch name {
         // Session management
         case "create_presentation":    return try createPresentation(args: args)
@@ -191,6 +193,11 @@ class PPTXMCPServer {
         case "set_shape_size":         return try setShapeSize(args: args)
         case "set_shape_fill":         return try setShapeFill(args: args)
 
+        // Geometry (cm)
+        case "set_placeholder_geometry":     return try setPlaceholderGeometry(args: args)
+        case "place_picture_at":             return try placePictureAt(args: args)
+        case "fit_picture_to_native_aspect": return try fitPictureToNativeAspect(args: args)
+
         // Notes & transition
         case "add_notes":              return try addNotes(args: args)
         case "set_transition":         return try setTransition(args: args)
@@ -211,7 +218,7 @@ class PPTXMCPServer {
 
     // MARK: - Tools Definition
 
-    private var allTools: [Tool] {
+    var allTools: [Tool] {
         [
             // --- Session Management ---
             tool("create_presentation", "建立新的空白 PowerPoint 簡報",
@@ -356,6 +363,38 @@ class PPTXMCPServer {
                          "slide_index": prop(.integer, "投影片索引"),
                          "shape_id": prop(.integer, "形狀 ID"),
                          "color": prop(.string, "Hex RGB 色碼（e.g. FF0000）")]),
+
+            // --- Geometry (cm) ---
+            tool("set_placeholder_geometry",
+                 "以公分設定任一頂層元素的位置與大小 — any shape (placeholder or otherwise), picture or table frame; "
+                 + "群組內元素不支援。超出投影片範圍仍會套用，回應附 warnings 指出越界的邊；寬高必須 > 0。"
+                 + "回應為 JSON，含 cm（小數兩位）與 EMU 幾何",
+                 required: ["doc_id", "slide_index", "shape_id", "x_cm", "y_cm", "width_cm", "height_cm"],
+                 props: ["doc_id": prop(.string, "簡報識別碼"),
+                         "slide_index": prop(.integer, "投影片索引"),
+                         "shape_id": prop(.integer, "形狀 ID"),
+                         "x_cm": prop(.number, "左緣 X（公分）"), "y_cm": prop(.number, "上緣 Y（公分）"),
+                         "width_cm": prop(.number, "寬度（公分，> 0）"), "height_cm": prop(.number, "高度（公分，> 0）")]),
+            tool("place_picture_at",
+                 "插入圖片並以公分定位（一次完成，回應含新 shape_id）。image_path 與 image_base64 擇一；"
+                 + "省略 height_cm 時依圖片原生像素比例推導高度（無法解碼的格式如 EMF/WMF 須給 height_cm）。"
+                 + "回應為 JSON，含 cm（小數兩位）與 EMU 幾何",
+                 required: ["doc_id", "slide_index", "x_cm", "y_cm", "width_cm"],
+                 props: ["doc_id": prop(.string, "簡報識別碼"),
+                         "slide_index": prop(.integer, "投影片索引"),
+                         "image_path": prop(.string, "圖片檔路徑（與 image_base64 擇一）"),
+                         "image_base64": prop(.string, "Base64 圖片資料（與 image_path 擇一）"),
+                         "x_cm": prop(.number, "左緣 X（公分）"), "y_cm": prop(.number, "上緣 Y（公分）"),
+                         "width_cm": prop(.number, "寬度（公分，> 0）"),
+                         "height_cm": prop(.number, "高度（公分，> 0；可選，省略則依原生比例推導）")]),
+            tool("fit_picture_to_native_aspect",
+                 "依圖片原生像素比例重算圖片的非錨定邊：anchor=width 保留寬度重算高度，anchor=height 反之；"
+                 + "位置不變。非圖片或群組內元素會回錯誤。回應為 JSON，含 cm（小數兩位）與 EMU 幾何",
+                 required: ["doc_id", "slide_index", "shape_id", "anchor"],
+                 props: ["doc_id": prop(.string, "簡報識別碼"),
+                         "slide_index": prop(.integer, "投影片索引"),
+                         "shape_id": prop(.integer, "圖片形狀 ID"),
+                         "anchor": prop(.string, "保留的邊：width 或 height")]),
 
             // --- Notes & Transition ---
             tool("add_notes", "新增或更新備忘稿",
@@ -574,9 +613,9 @@ class PPTXMCPServer {
             case .shape(let s):
                 let phStr = s.placeholder.map { " [placeholder:\($0.rawValue)]" } ?? ""
                 let text = s.textBody?.getText().prefix(50) ?? ""
-                lines.append("Shape id=\(s.id) name=\"\(s.name)\"\(phStr) pos=(\(s.position.x),\(s.position.y)) size=(\(s.size.width)×\(s.size.height)) text=\"\(text)\"")
+                lines.append("Shape id=\(s.id) name=\"\(s.name)\"\(phStr) pos=(\(s.position.x),\(s.position.y)) size=(\(s.size.width)×\(s.size.height)) \(cmSummary(s.position, s.size)) text=\"\(text)\"")
             case .picture(let p):
-                lines.append("Picture id=\(p.id) name=\"\(p.name)\" embed=\(p.imageRelationshipId) size=(\(p.size.width)×\(p.size.height))")
+                lines.append("Picture id=\(p.id) name=\"\(p.name)\" embed=\(p.imageRelationshipId) pos=(\(p.position.x),\(p.position.y)) size=(\(p.size.width)×\(p.size.height)) \(cmSummary(p.position, p.size))")
             case .graphicFrame(let f):
                 let tableInfo = f.table.map { "table \($0.columnCount)×\($0.rowCount)" } ?? "graphic"
                 lines.append("GraphicFrame id=\(f.id) name=\"\(f.name)\" \(tableInfo)")
@@ -647,6 +686,15 @@ class PPTXMCPServer {
         let w = args["width"]?.intValue ?? 3048000
         let h = args["height"]?.intValue ?? 2286000
 
+        let nextId = appendPicture(docId: docId, slideIndex: idx, data: data, fileName: fileName,
+                                   position: Position(x: x, y: y), size: Size(width: w, height: h))
+        return "已插入圖片: \(fileName) (id=\(nextId))"
+    }
+
+    /// Shared picture-insertion path (insert_image, place_picture_at): appends
+    /// the picture element and its media part, linking the two by file name.
+    private func appendPicture(docId: String, slideIndex idx: Int, data: Data, fileName: String,
+                               position: Position, size: Size) -> Int {
         let nextId = (openPresentations[docId]?.slides[idx].elements.compactMap { el -> Int? in
             switch el {
             case .shape(let s): return s.id
@@ -657,12 +705,12 @@ class PPTXMCPServer {
         }.max() ?? 1) + 1
 
         let rId = "rId\(nextId)"
-        let picture = Picture(id: nextId, name: fileName, position: Position(x: x, y: y),
-                              size: Size(width: w, height: h), imageRelationshipId: rId)
+        let picture = Picture(id: nextId, name: fileName, position: position, size: size,
+                              imageRelationshipId: rId, mediaFileName: fileName)
         openPresentations[docId]?.slides[idx].elements.append(.picture(picture))
         openPresentations[docId]?.images.append(MediaFile(id: fileName, fileName: fileName, data: data))
         markDirty(docId)
-        return "已插入圖片: \(fileName) (id=\(nextId))"
+        return nextId
     }
 
     private func deleteImage(args: [String: Value]) throws -> String {
@@ -939,6 +987,282 @@ class PPTXMCPServer {
         return "已設定填色 #\(color)"
     }
 
+    // MARK: - Geometry (cm)
+    //
+    // PsychQuant/macdoc#90 (Spectra change `pptx-geometry-tools`): lengths are
+    // centimeters (Double) at the tool boundary and EMU internally; conversion,
+    // validation, group rejection and aspect fitting live in PPTXSwift's
+    // Geometry module. Responses are JSON carrying cm (2-decimal) + EMU.
+
+    private func setPlaceholderGeometry(args: [String: Value]) throws -> String {
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        let x = try requiredCm(args, "x_cm")
+        let y = try requiredCm(args, "y_cm")
+        let w = try requiredCm(args, "width_cm")
+        let h = try requiredCm(args, "height_cm")
+
+        var slide = pres.slides[idx]
+        try slide.setGeometry(ofElementId: shapeId, xCm: x, yCm: y, widthCm: w, heightCm: h)
+        openPresentations[docId]?.slides[idx] = slide
+        markDirty(docId)
+
+        guard let (position, size) = topLevelGeometry(of: shapeId, in: slide) else {
+            throw PPTXError.invalidParameter("shape_id", "找不到形狀 id=\(shapeId)")
+        }
+        return geometryResponse(
+            [("shape_id", "\(shapeId)"), ("slide_index", "\(idx)")],
+            position: position, size: size, slideSize: pres.slideSize
+        )
+    }
+
+    private func placePictureAt(args: [String: Value]) throws -> String {
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let x = try requiredCm(args, "x_cm")
+        let y = try requiredCm(args, "y_cm")
+        let w = try requiredCm(args, "width_cm")
+        let explicitHeight = try optionalCm(args, "height_cm")
+        // Validate the rectangle before touching the image or the document;
+        // a derived height is stood in by 1 cm until it is known.
+        let validated = try PPTXMetric.geometry(xCm: x, yCm: y, widthCm: w, heightCm: explicitHeight ?? 1)
+        let source = try pictureSource(args)
+
+        var size = validated.size
+        var nativePixels: (width: Int, height: Int)?
+        if explicitHeight == nil {
+            let pixels: (width: Int, height: Int)
+            do {
+                pixels = try NativeAspect.pixelDimensions(of: source.data)
+            } catch {
+                throw PPTXError.invalidParameter(
+                    "height_cm",
+                    "無法從圖片讀出原生像素比例，請明確提供 height_cm（\(error.localizedDescription)）"
+                )
+            }
+            size = try NativeAspect.fittedSize(keeping: .width, of: validated.size,
+                                               pixelWidth: pixels.width, pixelHeight: pixels.height)
+            nativePixels = pixels
+        }
+
+        let fileName = uniqueMediaFileName(source.fileName, in: pres)
+        let shapeId = appendPicture(docId: docId, slideIndex: idx, data: source.data, fileName: fileName,
+                                    position: validated.position, size: size)
+
+        var fields: [(String, String)] = [
+            ("shape_id", "\(shapeId)"),
+            ("slide_index", "\(idx)"),
+            ("media_file", jsonString(fileName)),
+            ("height_source", jsonString(explicitHeight == nil ? "native_aspect" : "explicit")),
+        ]
+        if let nativePixels {
+            fields.append(("native_pixels", "{\"width\":\(nativePixels.width),\"height\":\(nativePixels.height)}"))
+        }
+        return geometryResponse(fields, position: validated.position, size: size, slideSize: pres.slideSize)
+    }
+
+    private func fitPictureToNativeAspect(args: [String: Value]) throws -> String {
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        guard let anchorName = args["anchor"]?.stringValue,
+              let anchor = AspectAnchor(rawValue: anchorName) else {
+            throw PPTXError.invalidParameter("anchor", "必須是 width 或 height")
+        }
+
+        let slide = pres.slides[idx]
+        let elementIndex: Int
+        switch slide.locateElement(id: shapeId) {
+        case .notFound:
+            throw PPTXError.invalidParameter("shape_id", "找不到形狀 id=\(shapeId)")
+        case .groupChild:
+            throw PPTXError.groupGeometryUnsupported(shapeId: shapeId)
+        case .topLevel(let index):
+            elementIndex = index
+        }
+        guard case .picture(var picture) = slide.elements[elementIndex] else {
+            if case .group = slide.elements[elementIndex] {
+                throw PPTXError.groupGeometryUnsupported(shapeId: shapeId)
+            }
+            throw PPTXError.invalidParameter(
+                "shape_id", "形狀 id=\(shapeId) 不是圖片；fit_picture_to_native_aspect 只適用於圖片"
+            )
+        }
+        guard let media = pres.mediaFile(for: picture) else {
+            throw PPTXError.invalidParameter(
+                "shape_id", "圖片 id=\(shapeId) 找不到嵌入的 media（r:embed=\(picture.imageRelationshipId)）"
+            )
+        }
+
+        let pixels: (width: Int, height: Int)
+        do {
+            pixels = try NativeAspect.pixelDimensions(of: media.data)
+        } catch PPTXError.undecodableImage(let detail) {
+            throw PPTXError.undecodableImage("media '\(media.fileName)'：\(detail)")
+        }
+        let fitted = try NativeAspect.fittedSize(keeping: anchor, of: picture.size,
+                                                 pixelWidth: pixels.width, pixelHeight: pixels.height)
+        picture.size = fitted
+        openPresentations[docId]?.slides[idx].elements[elementIndex] = .picture(picture)
+        markDirty(docId)
+
+        return geometryResponse(
+            [("shape_id", "\(shapeId)"),
+             ("slide_index", "\(idx)"),
+             ("anchor", jsonString(anchor.rawValue)),
+             ("native_pixels", "{\"width\":\(pixels.width),\"height\":\(pixels.height)}")],
+            position: picture.position, size: fitted, slideSize: pres.slideSize
+        )
+    }
+
+    // MARK: Geometry helpers
+
+    private func validSlideIndex(_ args: [String: Value], in pres: Presentation) throws -> Int {
+        let idx = try slideIndex(args)
+        guard idx >= 0 && idx < pres.slides.count else { throw PPTXError.invalidIndex(idx) }
+        return idx
+    }
+
+    private func requiredShapeId(_ args: [String: Value]) throws -> Int {
+        guard let shapeId = args["shape_id"]?.intValue else {
+            throw PPTXError.invalidParameter("shape_id", "需要 shape_id")
+        }
+        return shapeId
+    }
+
+    private func requiredCm(_ args: [String: Value], _ key: String) throws -> Double {
+        guard let value = try optionalCm(args, key) else {
+            throw PPTXError.invalidParameter(key, "需要 \(key)（公分）")
+        }
+        return value
+    }
+
+    private func optionalCm(_ args: [String: Value], _ key: String) throws -> Double? {
+        guard let raw = args[key], raw != .null else { return nil }
+        guard let value = raw.doubleValue else {
+            throw PPTXError.invalidParameter(key, "必須是數值（公分）")
+        }
+        return value
+    }
+
+    /// Exactly one of `image_path` / `image_base64`, with a media file name for it.
+    private func pictureSource(_ args: [String: Value]) throws -> (data: Data, fileName: String) {
+        switch (args["image_path"]?.stringValue, args["image_base64"]?.stringValue) {
+        case (let path?, nil):
+            guard FileManager.default.fileExists(atPath: path) else { throw PPTXError.fileNotFound(path) }
+            let url = URL(fileURLWithPath: path)
+            return (try Data(contentsOf: url), url.lastPathComponent)
+        case (nil, let base64?):
+            guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters), !data.isEmpty else {
+                throw PPTXError.invalidParameter("image_base64", "無效的 base64 圖片資料")
+            }
+            return (data, "image.\(imageFileExtension(of: data))")
+        case (nil, nil):
+            throw PPTXError.invalidParameter("image_path/image_base64", "需要 image_path 或 image_base64（擇一）")
+        case (.some, .some):
+            throw PPTXError.invalidParameter("image_path/image_base64", "image_path 與 image_base64 只能擇一")
+        }
+    }
+
+    private func imageFileExtension(of data: Data) -> String {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(source) as String?,
+              let ext = UTType(type)?.preferredFilenameExtension else { return "bin" }
+        return ext
+    }
+
+    /// Media parts are matched to pictures by file name, so a new picture must
+    /// never reuse an existing name (it would also overwrite ppt/media/ on save).
+    private func uniqueMediaFileName(_ preferred: String, in pres: Presentation) -> String {
+        let existing = Set(pres.images.map(\.fileName))
+        guard existing.contains(preferred) else { return preferred }
+        let base = (preferred as NSString).deletingPathExtension
+        let ext = (preferred as NSString).pathExtension
+        var n = 2
+        while true {
+            let candidate = ext.isEmpty ? "\(base)-\(n)" : "\(base)-\(n).\(ext)"
+            if !existing.contains(candidate) { return candidate }
+            n += 1
+        }
+    }
+
+    private func topLevelGeometry(of id: Int, in slide: Slide) -> (Position, Size)? {
+        guard case .topLevel(let index) = slide.locateElement(id: id) else { return nil }
+        switch slide.elements[index] {
+        case .shape(let s): return (s.position, s.size)
+        case .picture(let p): return (p.position, p.size)
+        case .graphicFrame(let f): return (f.position, f.size)
+        case .group: return nil
+        }
+    }
+
+    /// `pos_cm=(x,y) size_cm=(w×h)` for listings, 2-decimal centimeters.
+    private func cmSummary(_ position: Position, _ size: Size) -> String {
+        String(format: "pos_cm=(%.2f,%.2f) size_cm=(%.2f×%.2f)",
+               position.xCm, position.yCm, size.widthCm, size.heightCm)
+    }
+
+    /// JSON object: the given fields, then `geometry` (cm + EMU), then
+    /// `warnings` only when the rectangle leaves the slide.
+    private func geometryResponse(_ fields: [(String, String)], position: Position, size: Size,
+                                  slideSize: SlideSize) -> String {
+        var parts = fields.map { "\"\($0.0)\":\($0.1)" }
+        let cm = String(format: "{\"x\":%.2f,\"y\":%.2f,\"width\":%.2f,\"height\":%.2f}",
+                        position.xCm, position.yCm, size.widthCm, size.heightCm)
+        let emu = "{\"x\":\(position.x),\"y\":\(position.y),\"width\":\(size.width),\"height\":\(size.height)}"
+        parts.append("\"geometry\":{\"cm\":\(cm),\"emu\":\(emu)}")
+
+        let warnings = slideBoundWarnings(position, size, slideSize: slideSize)
+        if !warnings.isEmpty {
+            let items = warnings.map { "{\"bound\":\(jsonString($0.bound)),\"message\":\(jsonString($0.message))}" }
+            parts.append("\"warnings\":[\(items.joined(separator: ","))]")
+        }
+        return "{" + parts.joined(separator: ",") + "}"
+    }
+
+    /// Off-slide placement is legal (PowerPoint allows bleed), so it warns
+    /// rather than fails; each exceeded edge is named.
+    private func slideBoundWarnings(_ position: Position, _ size: Size,
+                                    slideSize: SlideSize) -> [(bound: String, message: String)] {
+        var warnings: [(bound: String, message: String)] = []
+        if position.x < 0 {
+            warnings.append(("left", String(format: "超出投影片左緣：x = %.2f cm < 0", position.xCm)))
+        }
+        if position.y < 0 {
+            warnings.append(("top", String(format: "超出投影片上緣：y = %.2f cm < 0", position.yCm)))
+        }
+        if position.x + size.width > slideSize.width {
+            warnings.append(("right", String(format: "超出投影片右緣：x + width = %.2f cm > 投影片寬度 %.2f cm",
+                                             position.xCm + size.widthCm, slideSize.widthCm)))
+        }
+        if position.y + size.height > slideSize.height {
+            warnings.append(("bottom", String(format: "超出投影片下緣：y + height = %.2f cm > 投影片高度 %.2f cm",
+                                              position.yCm + size.heightCm, slideSize.heightCm)))
+        }
+        return warnings
+    }
+
+    private func jsonString(_ text: String) -> String {
+        var out = "\""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if scalar.value < 0x20 {
+                    out += String(format: "\\u%04x", scalar.value)
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out + "\""
+    }
+
     // MARK: - Notes & Transition
 
     private func addNotes(args: [String: Value]) throws -> String {
@@ -1078,6 +1402,15 @@ extension Value {
         case .int(let v): return v
         case .double(let v): return Int(v)
         case .string(let s): return Int(s)
+        default: return nil
+        }
+    }
+
+    var doubleValue: Double? {
+        switch self {
+        case .double(let v): return v
+        case .int(let v): return Double(v)
+        case .string(let s): return Double(s)
         default: return nil
         }
     }
