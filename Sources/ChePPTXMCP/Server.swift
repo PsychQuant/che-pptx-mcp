@@ -692,22 +692,28 @@ class PPTXMCPServer {
         return "已插入圖片: \(fileName) (id=\(nextId))"
     }
 
-    /// One more than the largest top-level element id (at least 2); throws
+    /// One more than the largest element id anywhere in the slide's shape
+    /// tree — group children included, so a new element can never share an id
+    /// with (and shadow) an element inside a group — and at least 2. Throws
     /// instead of overflowing when an id is already `Int.max`.
     private func nextElementId(in slide: Slide) throws -> Int {
-        let maxId = slide.elements.map { el -> Int in
-            switch el {
-            case .shape(let s): return s.id
-            case .picture(let p): return p.id
-            case .graphicFrame(let f): return f.id
-            case .group(let g): return g.id
-            }
-        }.max() ?? 1
+        let maxId = maxElementId(in: slide.elements) ?? 1
         let (next, overflow) = maxId.addingReportingOverflow(1)
         guard !overflow else {
             throw PPTXError.invalidParameter("shape_id", "投影片上已有 id=\(maxId) 的元素，無法再配置新 id")
         }
         return next
+    }
+
+    private func maxElementId(in elements: [SlideElement]) -> Int? {
+        elements.compactMap { element -> Int? in
+            switch element {
+            case .shape(let s): return s.id
+            case .picture(let p): return p.id
+            case .graphicFrame(let f): return f.id
+            case .group(let g): return max(g.id, maxElementId(in: g.elements) ?? g.id)
+            }
+        }.max()
     }
 
     /// Shared picture-insertion path (insert_image, place_picture_at): appends
