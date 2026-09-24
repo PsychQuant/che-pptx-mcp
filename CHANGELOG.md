@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - 整數參數遇到 NaN、±Infinity、小數或超出 `Int` 範圍的數值時，server 不再 crash（#5）。原本的 `Value.intValue` 以 `Int(Double)` 轉換，遇到這些值直接 trap；它已刪除，所有工具的整數參數改走同一個 `optionalInt`／`requiredInt`（`Int(exactly:)`），無效時回傳指名參數的 `isError` 結果，文件與 dirty 狀態不變。
 - 同一類的其他 crash 一併移除（#5）：多數 session 工具未檢查 `slide_index` 是否在簡報內（陣列越界 trap），現在一律檢查；`insert_table` 的 `columns`／`rows` 為 0 或負數時會除以零或建立無效 range，現在限定 1–1000；`add_slide` 的負 `at_index` 會 trap，現在限定 0 到投影片數。
-- `insert_text_shape`、`insert_table` 的新元素 id 改由與 `insert_image`／`place_picture_at` 相同的配置函式產生（#6）：取整棵 shape tree（含巢狀群組子元素）的最大 id 加一，溢位時回傳錯誤而不是 trap。先前只看頂層元素，群組內已有 id=11 時新元素也會拿到 11，產生重複 id，並讓原本應被拒絕的群組子元素位址改指向新元素。
+- `insert_text_shape`、`insert_table` 的新元素 id 改由與 `insert_image`／`place_picture_at` 相同的配置函式產生（#6）：取整棵 shape tree（含巢狀群組子元素）的最大 id 加一（至少為 2）；最大 id 已達 DrawingML `ST_DrawingElementId` 上限（`unsignedInt`，4,294,967,295）時回傳錯誤，因此不會寫出無效的 id，也不會 `Int` 溢位 trap。先前只看頂層元素，群組內已有 id=11 時新元素也會拿到 11，產生重複 id，並讓原本應被拒絕的群組子元素位址改指向新元素。
 
 ## [0.2.0] - 2026-09-24
 

@@ -36,6 +36,10 @@ struct ElementIdAllocationTests {
         var args = args
         args["doc_id"] = .string(docId)
         let text = try server.executeToolTask(name: tool, args: args)
+        // place_picture_at answers with JSON; the older tools with "… id=N…".
+        if let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] {
+            return try #require(object["shape_id"] as? Int, "no shape_id in response: \(text)")
+        }
         let digits = text.split(separator: "=").last?.prefix { $0.isNumber } ?? ""
         return try #require(Int(digits), "no id in response: \(text)")
     }
@@ -77,6 +81,52 @@ struct ElementIdAllocationTests {
         }
         #expect(try slide("maxid").elements.count == 2)
         #expect(server.dirtyState["maxid"] == false)
+    }
+
+    // MARK: - Review round 1, HIGH 1: ids stay inside ST_DrawingElementId
+
+    /// Every tool that adds an element, with arguments that insert one.
+    static let allInsertingTools: [(tool: String, args: [String: Value])] = insertingTools + [
+        ("insert_image", ["slide_index": .int(0), "base64": .string(IntegerParameterTests.pngBase64),
+                          "file_name": .string("i.png")]),
+        ("place_picture_at", ["slide_index": .int(0), "image_base64": .string(IntegerParameterTests.pngBase64),
+                              "x_cm": .double(1), "y_cm": .double(1), "width_cm": .double(4)]),
+    ]
+
+    /// `p:cNvPr/@id` is `ST_DrawingElementId`, an `xsd:unsignedInt`.
+    static let maxDrawingElementId = Int(UInt32.max)
+
+    @Test(arguments: allInsertingTools)
+    func `The last id below the unsignedInt limit is still allocated`(tool: String, args: [String: Value]) throws {
+        installGroupedSession("near", children: [.shape(Shape(id: Self.maxDrawingElementId - 1, name: "child"))])
+        #expect(try insert(tool, args, docId: "near") == Self.maxDrawingElementId)
+    }
+
+    @Test(arguments: allInsertingTools)
+    func `An id at the unsignedInt limit anywhere in the tree is an error and leaves the slide unchanged`(
+        tool: String, args: [String: Value]
+    ) throws {
+        installGroupedSession("limit", children: [
+            .group(GroupShape(id: 20, name: "Inner", elements: [.shape(Shape(id: Self.maxDrawingElementId, name: "deep"))])),
+        ])
+        var args = args
+        args["doc_id"] = .string("limit")
+        let error = #expect(throws: PPTXError.self) {
+            _ = try server.executeToolTask(name: tool, args: args)
+        }
+        #expect(error?.errorDescription?.contains("\(Self.maxDrawingElementId)") == true, "\(String(describing: error))")
+        let pres = try #require(server.openPresentations["limit"])
+        #expect(pres.slides[0].elements.count == 2)
+        #expect(pres.images.isEmpty)
+        #expect(server.dirtyState["limit"] == false)
+    }
+
+    @Test(arguments: allInsertingTools)
+    func `Non-positive existing ids still yield an id of at least 2`(tool: String, args: [String: Value]) throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: -5, name: "odd")), .shape(Shape(id: 0, name: "zero"))]
+        server.initializeSession(docId: "low", presentation: pres, sourcePath: nil, autosave: false)
+        #expect(try insert(tool, args, docId: "low") == 2)
     }
 
     @Test(arguments: insertingTools)
