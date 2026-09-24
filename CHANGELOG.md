@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - autosave 寫檔失敗時不再清除 dirty 狀態（跨模型審查發現的既有問題，PsychQuant/macdoc#90）：先前寫入錯誤被 `try?` 吞掉、dirty 仍被清成 false，之後 `close_presentation` 會放行並丟掉唯一持有修改的 session。現在 dirty 保持 true，工具結果多一個獨立的 content 項目帶「自動存檔失敗」警告（第一個項目維持原樣，幾何工具的 JSON 回應仍可解析）。
 - `delete_image` 只刪除圖片（同上，PsychQuant/macdoc#90）：先前會刪掉任何 id 相符的元素，包括文字框、表格與整個群組，並回報「已刪除圖片」。
 - `insert_text_shape`、`insert_table` 的新元素 id 改由與 `insert_image`／`place_picture_at` 相同的配置函式產生（#6）：取整棵 shape tree（含巢狀群組子元素）的最大 id 加一（至少為 2）；最大 id 已達 DrawingML `ST_DrawingElementId` 上限（`unsignedInt`，4,294,967,295）時回傳錯誤，因此不會寫出無效的 id，也不會 `Int` 溢位 trap。先前只看頂層元素，群組內已有 id=11 時新元素也會拿到 11，產生重複 id，並讓原本應被拒絕的群組子元素位址改指向新元素。
+- pptx-swift 下限提高到 **0.3.0**：存出的檔案帶有圖片 relationship、media part 與 content type（PsychQuant/pptx-swift#1），原生比例考慮 EXIF 方向（PsychQuant/pptx-swift#2）。
+- `fit_picture_to_native_aspect` 以 `srcRect` 裁切後的可見區域計算比例（PsychQuant/pptx-swift#2）；裁切過的圖片不再變形，裁切本身不變。
 
 ## [0.2.0] - 2026-09-24
 

@@ -272,6 +272,27 @@ final class GeometryToolsTests: XCTestCase {
         XCTAssertEqual(stored.size.height, 1800000)
     }
 
+    /// pptx-swift#2：比例以 srcRect 裁切後的可見區域為準。1600×1200 的圖左右各裁 25%，
+    /// 可見 800×1200（2:3），寬度錨定 10cm 時高度應為 15cm，而不是未裁切的 7.5cm。
+    func testFitUsesTheVisibleAreaOfACroppedPicture() throws {
+        var pres = PptxWriter.createNew()
+        var picture = PPTXSwift.Picture(id: 2, name: "cropped.png", position: Position(x: 720000, y: 1080000),
+                                        size: Size(width: 3600000, height: 1800000),
+                                        imageRelationshipId: "rId2", mediaFileName: "cropped.png")
+        picture.sourceRect = PictureSourceRect(left: 25_000, right: 25_000)
+        pres.slides[0].elements = [.picture(picture)]
+        pres.images = [MediaFile(id: "cropped.png", fileName: "cropped.png", data: try fourByThreePNGData())]
+        server.initializeSession(docId: "crop", presentation: pres, sourcePath: nil, autosave: false)
+
+        var args = fitArgs(2, "width")
+        args["doc_id"] = .string("crop")
+        _ = try call("fit_picture_to_native_aspect", args)
+        let stored = try XCTUnwrap(server.openPresentations["crop"]?.slides[0].pictures.first { $0.id == 2 })
+        XCTAssertEqual(stored.size.width, 3600000)
+        XCTAssertEqual(stored.size.height, 5400000, "裁切後可見 800×1200，高度應是寬度的 1.5 倍")
+        XCTAssertEqual(stored.sourceRect, PictureSourceRect(left: 25_000, right: 25_000), "fit 不得改動裁切")
+    }
+
     func testFitWorksOnPicturesInsertedByInsertImage() throws {
         let inserted = try call("insert_image", [
             "doc_id": .string(docId), "slide_index": .int(0),
