@@ -34,6 +34,8 @@ struct BooleanParameterTests {
     }
 
     /// A fresh, saved-to-disk .pptx file for `open_presentation` calls.
+    /// Every call site is responsible for removing what this returns
+    /// (review round 1, LOW 4: orphaned fixtures must not accumulate).
     func fixtureFile() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("bool-param-\(UUID().uuidString).pptx")
@@ -42,13 +44,16 @@ struct BooleanParameterTests {
     }
 
     /// Arguments (besides `doc_id` and the boolean parameter itself) each
-    /// tool needs to reach its `autosave` handling.
-    func baseArgs(_ tool: String, docId: String) throws -> [String: Value] {
+    /// tool needs to reach its `autosave` handling. When `tool` is
+    /// `open_presentation`, the fixture file's URL is also returned so the
+    /// caller can remove it afterwards.
+    func baseArgs(_ tool: String, docId: String) throws -> (args: [String: Value], fixture: URL?) {
         switch tool {
         case "open_presentation":
-            return ["doc_id": .string(docId), "path": .string(try fixtureFile().path)]
+            let fixture = try fixtureFile()
+            return (["doc_id": .string(docId), "path": .string(fixture.path)], fixture)
         default:
-            return ["doc_id": .string(docId)]
+            return (["doc_id": .string(docId)], nil)
         }
     }
 
@@ -84,7 +89,9 @@ struct BooleanParameterTests {
     func `JSON true and false are both accepted`(tool: String, key: String) async throws {
         for value in [true, false] {
             let docId = "bool-ok-\(tool)-\(value)-\(UUID().uuidString)"
-            var args = try baseArgs(tool, docId: docId)
+            let (baseArgs, fixture) = try baseArgs(tool, docId: docId)
+            defer { if let fixture { try? FileManager.default.removeItem(at: fixture) } }
+            var args = baseArgs
             args[key] = .bool(value)
             let result = try await call(tool, args)
             #expect(!result.isError, "\(tool).\(key)=\(value): \(result.text)")
@@ -93,14 +100,41 @@ struct BooleanParameterTests {
 
     // MARK: - Scenario: missing or null falls back to the documented default (false)
 
+    /// Not just "the call doesn't error" (review round 1, LOW 3): a
+    /// regression that defaulted to `true` instead of `false` would still
+    /// pass a bare `!result.isError` check. Establishing a save path and
+    /// then editing distinguishes the two defaults the same way the
+    /// `autosave true`/`autosave false` behavioral tests below do.
     @Test(arguments: booleanParameters)
-    func `Missing or null falls back to the default without an error`(tool: String, key: String) async throws {
+    func `Missing or null falls back to false, not true, without an error`(tool: String, key: String) async throws {
         for absent: Value? in [nil, .null] {
             let docId = "bool-absent-\(tool)-\(String(describing: absent))-\(UUID().uuidString)"
-            var args = try baseArgs(tool, docId: docId)
+            let (baseArgs, fixture) = try baseArgs(tool, docId: docId)
+            defer { if let fixture { try? FileManager.default.removeItem(at: fixture) } }
+            var args = baseArgs
             if let absent { args[key] = absent }
             let result = try await call(tool, args)
             #expect(!result.isError, "\(tool).\(key)=\(String(describing: absent)): \(result.text)")
+
+            // Establish a save path (open_presentation already has one via
+            // its fixture; create_presentation needs an explicit save), then
+            // edit. If the default were `true`, this edit would autosave
+            // and clear dirty; the documented default `false` leaves it dirty.
+            if tool == "create_presentation" {
+                let savePath = try fixtureFile()
+                defer { try? FileManager.default.removeItem(at: savePath) }
+                let saved = try await call("save_presentation", [
+                    "doc_id": .string(docId), "path": .string(savePath.path),
+                ])
+                #expect(!saved.isError, "\(saved.text)")
+            }
+            let edited = try await call("insert_text_shape", [
+                "doc_id": .string(docId), "slide_index": .int(0), "text": .string("x"),
+                "x": .int(0), "y": .int(0), "width": .int(914_400), "height": .int(914_400),
+            ])
+            #expect(!edited.isError, "\(edited.text)")
+            #expect(server.dirtyState[docId] == true,
+                    "\(tool).\(key)=\(String(describing: absent)): default must be false — an edit must stay dirty, not autosave")
         }
     }
 
@@ -120,9 +154,15 @@ struct BooleanParameterTests {
     func `Non-boolean JSON types are rejected as an isError result naming the parameter`(
         tool: String, key: String
     ) async throws {
+        // open_presentation only needs one fixture file for the whole loop
+        // — every case is rejected before the file is ever read.
+        let sharedFixture: URL? = tool == "open_presentation" ? try fixtureFile() : nil
+        defer { if let sharedFixture { try? FileManager.default.removeItem(at: sharedFixture) } }
+
         for bad in Self.nonBooleanValues {
             let docId = "bool-bad-\(tool)-\(UUID().uuidString)"
-            var args = try baseArgs(tool, docId: docId)
+            var args: [String: Value] = ["doc_id": .string(docId)]
+            if let sharedFixture { args["path"] = .string(sharedFixture.path) }
             args[key] = bad
             let result = try await call(tool, args)
             #expect(result.isError, "\(tool).\(key)=\(bad): \(result.text)")
@@ -149,12 +189,13 @@ struct BooleanParameterTests {
 
     // MARK: - Scenario: the boolean actually reaches the autosave behavior it names
 
-    /// Not just "the call doesn't error" — `autosave: true` must genuinely
-    /// enable the write-back-on-edit path `markDirty` implements (Server.swift),
-    /// and `autosave: false` (or omitted) must not. A validator that accepts
-    /// the JSON type but drops the value on the floor would still pass every
-    /// other test in this file.
-    @Test func `autosave true on create_presentation actually autosaves on edit`() async throws {
+    /// Not just "the call doesn't error" and not just "the dirty flag
+    /// clears" (review round 1, MEDIUM 3: a broken implementation that
+    /// clears the flag without writing would pass a dirty-flag-only check)
+    /// — `autosave: true` must genuinely write the edit to disk. Reloading
+    /// the file with a fresh `PptxReader` (not the in-memory session) is
+    /// the only way to prove that.
+    @Test func `autosave true on create_presentation actually persists the edit to disk`() async throws {
         let docId = "bool-behavior-create-\(UUID().uuidString)"
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("bool-behavior-\(UUID().uuidString).pptx")
         defer { try? FileManager.default.removeItem(at: out) }
@@ -172,12 +213,29 @@ struct BooleanParameterTests {
         #expect(!edited.isError, "\(edited.text)")
         #expect(server.dirtyState[docId] == false,
                 "autosave=true must clear dirty by writing back to disk after the edit")
+
+        let reloaded = try PptxReader.read(from: out)
+        #expect(reloaded.slides[0].getText().contains("autosaved"),
+                "autosave=true must have written the edit to disk, not just cleared the in-memory dirty flag")
     }
 
-    @Test func `autosave false on create_presentation leaves edits dirty until an explicit save`() async throws {
+    /// Not just "the flag stays dirty" (review round 1, MEDIUM 2: without a
+    /// save path even a regression that treats `false` as `true` would
+    /// leave the edit dirty, because `markDirty` only writes back when
+    /// `originalPaths[docId]` is set). Establishing a path first — exactly
+    /// like the `true` test above — makes this test actually distinguish
+    /// "autosave disabled" from "autosave enabled but nowhere to write",
+    /// and the reload confirms the edit was never persisted.
+    @Test func `autosave false on create_presentation leaves edits dirty and unpersisted even with a save path`() async throws {
         let docId = "bool-behavior-nosave-\(UUID().uuidString)"
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("bool-behavior-\(UUID().uuidString).pptx")
+        defer { try? FileManager.default.removeItem(at: out) }
+
         let created = try await call("create_presentation", ["doc_id": .string(docId), "autosave": .bool(false)])
         #expect(!created.isError, "\(created.text)")
+        let saved = try await call("save_presentation", ["doc_id": .string(docId), "path": .string(out.path)])
+        #expect(!saved.isError, "\(saved.text)")
+        #expect(server.dirtyState[docId] == false)
 
         let edited = try await call("insert_text_shape", [
             "doc_id": .string(docId), "slide_index": .int(0), "text": .string("not autosaved"),
@@ -185,6 +243,10 @@ struct BooleanParameterTests {
         ])
         #expect(!edited.isError, "\(edited.text)")
         #expect(server.dirtyState[docId] == true,
-                "autosave=false must leave the edit dirty — no path was even given to write back to")
+                "autosave=false must leave the edit dirty even though a save path exists")
+
+        let reloaded = try PptxReader.read(from: out)
+        #expect(!reloaded.slides[0].getText().contains("not autosaved"),
+                "autosave=false must not have written the unsaved edit to disk")
     }
 }
