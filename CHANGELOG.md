@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- CI 新增 `swift-test` job（#10）：在 `macos-latest` 上跑 `swift build` + `swift test`。先前 `.github/workflows/ci.yml` 只在 ubuntu-latest 跑 shellcheck 與 `scripts/tests/*.sh`（#4），`swift test` 從未在任何機器上跑過。2026-09 的 `macos-latest` 解析到 macOS 26（arm64，預設 Xcode 26.6），能建置本套件 `swift-tools-version: 5.9` 的 manifest；repo 公開，macOS runner 分鐘數不計費。
+- CI 新增 `actionlint` job（#10）：在 ubuntu-latest 靜態檢查 workflow 檔案本身。下載固定版本（v1.7.12）的官方 release 二進位並用官方 checksums 檔驗證 sha256，不用 `curl | bash` 抓可變的 `main` 分支腳本。
+
+### Changed
+
+- 布林參數改用與 #5 整數參數相同的嚴格 JSON 型別規則（#10）：只接受 JSON 的 `true`／`false`，其餘一律回參數錯誤，命名該參數。移除舊的 `Value.boolValue`——它會把字串 `"true"`／`"1"` 轉成 `true`，但因為 `.string(let s)` 這個 case 本身不會落到 `default: return nil`，**任何其他字串（包含字面上的 `"false"`）都被默默轉成 `false`**，不是回錯誤。受影響參數：`create_presentation`／`open_presentation` 的 `autosave`（目前僅有的兩個布林參數，已用逐一比對 schema 的測試鎖定「沒有漏掉任何布林參數」）。
+
 ## [0.3.0] - 2026-09-24
 
 ### Added
