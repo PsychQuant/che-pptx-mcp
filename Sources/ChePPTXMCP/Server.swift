@@ -1264,12 +1264,22 @@ class PPTXMCPServer {
     // rejecting it). A value that fails is a `PPTXError.invalidParameter`
     // naming the key, which `handleToolCall` returns as an `isError` result.
 
-    /// The value under `key`, or nil when it is absent or JSON null. There
-    /// is deliberately no `requiredBool` sibling to `requiredInt`: every
-    /// boolean parameter in the current tool schemas (`autosave` on
-    /// `create_presentation` / `open_presentation`) is optional with a
-    /// `false` default, and an untested helper with no call site is dead
-    /// code — add `requiredBool` alongside its own test when a tool needs one.
+    /// The value under `key`, or nil when it is absent or JSON null.
+    ///
+    /// Null is deliberately treated the same as "absent" here, exactly like
+    /// `optionalInt` above — this is what "與整數相同的嚴格 JSON 型別規則"
+    /// (#10) means in practice: an *optional* parameter's contract is "a
+    /// present value must be the right JSON type or it's an error", not
+    /// "null is also an error". `IntegerParameterTests`'s own
+    /// `Missing or null integers follow the schema's required list` test
+    /// pins this for integers; `BooleanParameterTests` pins the same rule
+    /// for booleans. Only a *required* parameter's null/absence is an error
+    /// (see `requiredInt`) — there is deliberately no `requiredBool`
+    /// sibling: every boolean parameter in the current tool schemas
+    /// (`autosave` on `create_presentation` / `open_presentation`) is
+    /// optional with a `false` default, and an untested helper with no call
+    /// site is dead code — add `requiredBool` alongside its own test when a
+    /// tool needs one.
     private func optionalBool(_ args: [String: Value], _ key: String) throws -> Bool? {
         switch args[key] {
         case nil, .null?:

@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- 布林參數改用與 #5 整數參數相同的嚴格 JSON 型別規則（#10）：只接受 JSON 的 `true`／`false`，其餘一律回參數錯誤，命名該參數。移除舊的 `Value.boolValue`——它會把字串 `"true"`／`"1"` 轉成 `true`，但因為 `.string(let s)` 這個 case 本身不會落到 `default: return nil`，**任何其他字串（包含字面上的 `"false"`）都被默默轉成 `false`**，不是回錯誤。受影響參數：`create_presentation`／`open_presentation` 的 `autosave`（目前僅有的兩個布林參數，已用逐一比對 schema 的測試鎖定「沒有漏掉任何布林參數」）。
+- 布林參數改用與 #5 整數參數相同的嚴格 JSON 型別規則（#10）：只接受 JSON 的 `true`／`false`，其餘一律回參數錯誤，命名該參數。缺少或明確的 JSON `null` 視同未提供、套用預設值 `false`（與 `optionalInt` 對整數參數的規則一致，不是本次新增的例外）。移除舊的 `Value.boolValue`——它會把字串 `"true"`／`"1"` 轉成 `true`，但因為 `.string(let s)` 這個 case 本身不會落到 `default: return nil`，**任何其他字串（包含字面上的 `"false"`）都被默默轉成 `false`**，不是回錯誤。受影響參數：`create_presentation`／`open_presentation` 的 `autosave`（目前僅有的兩個布林參數，已用逐一比對 schema 的測試鎖定「沒有漏掉任何布林參數」）。
 
 ## [0.3.0] - 2026-09-24
 
