@@ -356,12 +356,19 @@ final class GeometryToolsTests: XCTestCase {
     }
 
     func testFitAfterInsertImageWithExtremeOffsetDoesNotTrap() throws {
-        _ = try call("insert_image", [
+        // Since #5, insert_image itself rejects an offset outside ST_Coordinate,
+        // so an extreme picture can no longer be created this way; fit on one
+        // that already exists (e.g. read from a file) is covered by
+        // testFitOnExtremeExistingGeometryFailsWithoutTouchingTheDocument.
+        let before = try snapshot()
+        XCTAssertThrowsError(try call("insert_image", [
             "doc_id": .string(docId), "slide_index": .int(0),
             "base64": .string(fourByThreePNG()), "file_name": .string("far.png"),
             "x": .int(Int.max), "y": .int(0), "width": .int(3600000), "height": .int(1800000),
-        ])
-        let before = try snapshot()
+        ])) { error in
+            XCTAssertTrue(error.localizedDescription.contains("x"), "\(error.localizedDescription)")
+        }
+        XCTAssertEqual(try snapshot(), before)
         XCTAssertThrowsError(try call("fit_picture_to_native_aspect", fitArgs(2, "width")))
         XCTAssertEqual(try snapshot(), before)
     }

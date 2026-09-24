@@ -133,7 +133,7 @@ class PPTXMCPServer {
         }
     }
 
-    private func handleToolCall(_ params: CallTool.Parameters) async throws -> CallTool.Result {
+    func handleToolCall(_ params: CallTool.Parameters) async throws -> CallTool.Result {
         let name = params.name
         let args = params.arguments ?? [:]
 
@@ -464,13 +464,6 @@ class PPTXMCPServer {
 
     // MARK: - Helper
 
-    private func slideIndex(_ args: [String: Value]) throws -> Int {
-        guard let idx = args["slide_index"]?.intValue else {
-            throw PPTXError.invalidParameter("slide_index", "需要 slide_index")
-        }
-        return idx
-    }
-
     private func findShape(in slide: Slide, id: Int) -> (Int, Shape)? {
         for (i, el) in slide.elements.enumerated() {
             if case .shape(let s) = el, s.id == id { return (i, s) }
@@ -593,19 +586,13 @@ class PPTXMCPServer {
 
     private func getSlideText(args: [String: Value]) throws -> String {
         let (pres, _) = try resolvePresentation(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < pres.slides.count else {
-            throw PPTXError.invalidIndex(idx)
-        }
+        let idx = try validSlideIndex(args, in: pres)
         return pres.slides[idx].getText()
     }
 
     private func getSlideShapes(args: [String: Value]) throws -> String {
         let (pres, _) = try resolvePresentation(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < pres.slides.count else {
-            throw PPTXError.invalidIndex(idx)
-        }
+        let idx = try validSlideIndex(args, in: pres)
 
         var lines: [String] = []
         for element in pres.slides[idx].elements {
@@ -628,13 +615,8 @@ class PPTXMCPServer {
 
     private func getShapeText(args: [String: Value]) throws -> String {
         let (pres, _) = try resolvePresentation(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < pres.slides.count else {
-            throw PPTXError.invalidIndex(idx)
-        }
-        guard let shapeId = args["shape_id"]?.intValue else {
-            throw PPTXError.invalidParameter("shape_id", "需要 shape_id")
-        }
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
         guard let (_, shape) = findShape(in: pres.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到形狀 id=\(shapeId)")
         }
@@ -643,10 +625,7 @@ class PPTXMCPServer {
 
     private func getSlideNotes(args: [String: Value]) throws -> String {
         let (pres, _) = try resolvePresentation(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < pres.slides.count else {
-            throw PPTXError.invalidIndex(idx)
-        }
+        let idx = try validSlideIndex(args, in: pres)
         return pres.slides[idx].notes ?? "(no notes)"
     }
 
@@ -670,21 +649,17 @@ class PPTXMCPServer {
     }
 
     private func insertImage(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < (openPresentations[docId]?.slides.count ?? 0) else {
-            throw PPTXError.invalidIndex(idx)
-        }
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let x = try coordinateEmu(args, "x", default: 0)
+        let y = try coordinateEmu(args, "y", default: 0)
+        let w = try extentEmu(args, "width", default: 3048000)
+        let h = try extentEmu(args, "height", default: 2286000)
         guard let base64 = args["base64"]?.stringValue,
               let fileName = args["file_name"]?.stringValue,
               let data = Data(base64Encoded: base64) else {
             throw PPTXError.invalidParameter("base64", "Invalid base64 data")
         }
-
-        let x = args["x"]?.intValue ?? 0
-        let y = args["y"]?.intValue ?? 0
-        let w = args["width"]?.intValue ?? 3048000
-        let h = args["height"]?.intValue ?? 2286000
 
         let nextId = try nextElementId(in: openPresentations[docId]!.slides[idx])
         appendPicture(docId: docId, slideIndex: idx, id: nextId, data: data, fileName: fileName,
@@ -732,11 +707,9 @@ class PPTXMCPServer {
     }
 
     private func deleteImage(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue else {
-            throw PPTXError.invalidParameter("shape_id", "需要 shape_id")
-        }
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
         guard let elIdx = findElement(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
         }
@@ -749,8 +722,7 @@ class PPTXMCPServer {
 
     private func getTables(args: [String: Value]) throws -> String {
         let (pres, _) = try resolvePresentation(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < pres.slides.count else { throw PPTXError.invalidIndex(idx) }
+        let idx = try validSlideIndex(args, in: pres)
 
         let tables = pres.slides[idx].tables
         if tables.isEmpty { return "No tables on this slide" }
@@ -761,11 +733,8 @@ class PPTXMCPServer {
 
     private func getTableData(args: [String: Value]) throws -> String {
         let (pres, _) = try resolvePresentation(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < pres.slides.count else { throw PPTXError.invalidIndex(idx) }
-        guard let shapeId = args["shape_id"]?.intValue else {
-            throw PPTXError.invalidParameter("shape_id", "需要 shape_id")
-        }
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
 
         guard let frame = pres.slides[idx].elements.compactMap({ el -> GraphicFrame? in
             if case .graphicFrame(let f) = el, f.id == shapeId { return f }
@@ -783,19 +752,15 @@ class PPTXMCPServer {
     }
 
     private func insertTable(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard idx >= 0 && idx < (openPresentations[docId]?.slides.count ?? 0) else {
-            throw PPTXError.invalidIndex(idx)
-        }
-        guard let cols = args["columns"]?.intValue, let rows = args["rows"]?.intValue else {
-            throw PPTXError.invalidParameter("columns/rows", "需要 columns 和 rows")
-        }
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let cols = try requiredInt(args, "columns", in: Self.tableDimensionRange)
+        let rows = try requiredInt(args, "rows", in: Self.tableDimensionRange)
 
-        let x = args["x"]?.intValue ?? 457200
-        let y = args["y"]?.intValue ?? 1600200
-        let w = args["width"]?.intValue ?? 8229600
-        let h = args["height"]?.intValue ?? 3657600
+        let x = try coordinateEmu(args, "x", default: 457200)
+        let y = try coordinateEmu(args, "y", default: 1600200)
+        let w = try extentEmu(args, "width", default: 8229600)
+        let h = try extentEmu(args, "height", default: 3657600)
 
         let colWidth = w / cols
         let rowHeight = h / rows
@@ -817,13 +782,13 @@ class PPTXMCPServer {
     }
 
     private func updateCell(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue,
-              let row = args["row"]?.intValue,
-              let col = args["col"]?.intValue,
-              let text = args["text"]?.stringValue else {
-            throw PPTXError.invalidParameter("", "需要 shape_id, row, col, text")
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        let row = try requiredInt(args, "row")
+        let col = try requiredInt(args, "col")
+        guard let text = args["text"]?.stringValue else {
+            throw PPTXError.invalidParameter("text", "需要 text")
         }
 
         guard let elIdx = findElement(in: openPresentations[docId]!.slides[idx], id: shapeId),
@@ -840,10 +805,10 @@ class PPTXMCPServer {
     // MARK: - Slide Management
 
     private func addSlide(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
+        let (docId, pres) = try requireSession(args: args)
         let slide = Slide()
-        if let atIndex = args["at_index"]?.intValue {
-            openPresentations[docId]?.slides.insert(slide, at: min(atIndex, openPresentations[docId]!.slides.count))
+        if let atIndex = try optionalInt(args, "at_index", in: 0...pres.slides.count) {
+            openPresentations[docId]?.slides.insert(slide, at: atIndex)
         } else {
             openPresentations[docId]?.slides.append(slide)
         }
@@ -853,8 +818,8 @@ class PPTXMCPServer {
     }
 
     private func deleteSlide(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
         try openPresentations[docId]?.deleteSlide(at: idx)
         markDirty(docId)
         return "已刪除投影片 \(idx)"
@@ -862,17 +827,16 @@ class PPTXMCPServer {
 
     private func reorderSlides(args: [String: Value]) throws -> String {
         let (docId, _) = try requireSession(args: args)
-        guard let from = args["from_index"]?.intValue, let to = args["to_index"]?.intValue else {
-            throw PPTXError.invalidParameter("from_index/to_index", "需要 from_index 和 to_index")
-        }
+        let from = try requiredInt(args, "from_index")
+        let to = try requiredInt(args, "to_index")
         try openPresentations[docId]?.reorderSlide(from: from, to: to)
         markDirty(docId)
         return "已將投影片從位置 \(from) 移到 \(to)"
     }
 
     private func duplicateSlide(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
         let newIdx = try openPresentations[docId]!.duplicateSlide(at: idx)
         markDirty(docId)
         return "已複製投影片 \(idx) → \(newIdx)"
@@ -881,16 +845,16 @@ class PPTXMCPServer {
     // MARK: - Shape Editing
 
     private func insertTextShape(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
         guard let text = args["text"]?.stringValue else {
             throw PPTXError.invalidParameter("text", "需要 text")
         }
 
-        let x = args["x"]?.intValue ?? 457200
-        let y = args["y"]?.intValue ?? 1600200
-        let w = args["width"]?.intValue ?? 8229600
-        let h = args["height"]?.intValue ?? 1143000
+        let x = try coordinateEmu(args, "x", default: 457200)
+        let y = try coordinateEmu(args, "y", default: 1600200)
+        let w = try extentEmu(args, "width", default: 8229600)
+        let h = try extentEmu(args, "height", default: 1143000)
 
         let nextId = try nextElementId(in: openPresentations[docId]!.slides[idx])
 
@@ -907,11 +871,11 @@ class PPTXMCPServer {
     }
 
     private func updateShapeText(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue,
-              let text = args["text"]?.stringValue else {
-            throw PPTXError.invalidParameter("", "需要 shape_id 和 text")
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        guard let text = args["text"]?.stringValue else {
+            throw PPTXError.invalidParameter("text", "需要 text")
         }
 
         guard let (elIdx, foundShape) = findShape(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
@@ -925,11 +889,9 @@ class PPTXMCPServer {
     }
 
     private func deleteShape(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue else {
-            throw PPTXError.invalidParameter("shape_id", "需要 shape_id")
-        }
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
         guard let elIdx = findElement(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
         }
@@ -939,13 +901,11 @@ class PPTXMCPServer {
     }
 
     private func setShapePosition(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue,
-              let x = args["x"]?.intValue,
-              let y = args["y"]?.intValue else {
-            throw PPTXError.invalidParameter("", "需要 shape_id, x, y")
-        }
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        let x = try requiredInt(args, "x", in: PPTXMetric.coordinateRangeEmu)
+        let y = try requiredInt(args, "y", in: PPTXMetric.coordinateRangeEmu)
         guard let (elIdx, foundShape) = findShape(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
         }
@@ -957,13 +917,11 @@ class PPTXMCPServer {
     }
 
     private func setShapeSize(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue,
-              let w = args["width"]?.intValue,
-              let h = args["height"]?.intValue else {
-            throw PPTXError.invalidParameter("", "需要 shape_id, width, height")
-        }
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        let w = try requiredInt(args, "width", in: Self.extentRangeEmu)
+        let h = try requiredInt(args, "height", in: Self.extentRangeEmu)
         guard let (elIdx, foundShape) = findShape(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
         }
@@ -975,11 +933,11 @@ class PPTXMCPServer {
     }
 
     private func setShapeFill(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
-        guard let shapeId = args["shape_id"]?.intValue,
-              let color = args["color"]?.stringValue else {
-            throw PPTXError.invalidParameter("", "需要 shape_id 和 color")
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
+        let shapeId = try requiredShapeId(args)
+        guard let color = args["color"]?.stringValue else {
+            throw PPTXError.invalidParameter("color", "需要 color")
         }
         guard let (elIdx, foundShape) = findShape(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
@@ -1163,9 +1121,29 @@ class PPTXMCPServer {
         try requiredInt(args, "shape_id")
     }
 
-    /// A JSON integer, or a finite integral double that fits `Int`.
-    private func requiredInt(_ args: [String: Value], _ key: String) throws -> Int {
+    // MARK: Integer parameters (#5)
+    //
+    // Every integer parameter of every tool goes through `optionalInt`: a
+    // JSON integer, or a double that is finite, integral and inside `Int`
+    // (`Int(exactly:)` — NaN, ±Infinity, 0.5 and 2^63 all fail it). Strings,
+    // booleans and other JSON types are rejected, never coerced. A value that
+    // fails any check is a `PPTXError.invalidParameter` naming the key, which
+    // `handleToolCall` returns as an `isError` result — no conversion here can
+    // trap. There is deliberately no `Value.intValue`-style shortcut.
+
+    /// Upper bound on `insert_table` columns and rows — a resource guard
+    /// against allocating an unbounded table, not a PowerPoint limit.
+    static let maxTableDimension = 1000
+    static let tableDimensionRange = 1...maxTableDimension
+
+    /// `ST_PositiveCoordinate`: widths and heights in EMU.
+    static let extentRangeEmu = 0...PPTXMetric.maxCoordinateEmu
+
+    /// The value under `key`, or nil when it is absent or JSON null.
+    private func optionalInt(_ args: [String: Value], _ key: String) throws -> Int? {
         switch args[key] {
+        case nil, .null?:
+            return nil
         case .int(let value)?:
             return value
         case .double(let value)?:
@@ -1173,11 +1151,44 @@ class PPTXMCPServer {
                 throw PPTXError.invalidParameter(key, "必須是整數（收到 \(value)）")
             }
             return exact
-        case nil, .null?:
-            throw PPTXError.invalidParameter(key, "需要 \(key)")
         case let other?:
             throw PPTXError.invalidParameter(key, "必須是整數，不接受 \(jsonTypeName(other))")
         }
+    }
+
+    private func optionalInt(_ args: [String: Value], _ key: String, in range: ClosedRange<Int>) throws -> Int? {
+        guard let value = try optionalInt(args, key) else { return nil }
+        guard range.contains(value) else {
+            throw PPTXError.invalidParameter(
+                key, "必須介於 \(range.lowerBound) 與 \(range.upperBound) 之間（收到 \(value)）"
+            )
+        }
+        return value
+    }
+
+    /// A JSON integer, or a finite integral double that fits `Int`.
+    private func requiredInt(_ args: [String: Value], _ key: String) throws -> Int {
+        guard let value = try optionalInt(args, key) else {
+            throw PPTXError.invalidParameter(key, "需要 \(key)")
+        }
+        return value
+    }
+
+    private func requiredInt(_ args: [String: Value], _ key: String, in range: ClosedRange<Int>) throws -> Int {
+        guard let value = try optionalInt(args, key, in: range) else {
+            throw PPTXError.invalidParameter(key, "需要 \(key)")
+        }
+        return value
+    }
+
+    /// An optional EMU position (`ST_Coordinate`), `fallback` when absent.
+    private func coordinateEmu(_ args: [String: Value], _ key: String, default fallback: Int) throws -> Int {
+        try optionalInt(args, key, in: PPTXMetric.coordinateRangeEmu) ?? fallback
+    }
+
+    /// An optional EMU width or height (`ST_PositiveCoordinate`), `fallback` when absent.
+    private func extentEmu(_ args: [String: Value], _ key: String, default fallback: Int) throws -> Int {
+        try optionalInt(args, key, in: Self.extentRangeEmu) ?? fallback
     }
 
     private func requiredCm(_ args: [String: Value], _ key: String) throws -> Double {
@@ -1350,8 +1361,8 @@ class PPTXMCPServer {
     // MARK: - Notes & Transition
 
     private func addNotes(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
         guard let text = args["text"]?.stringValue else {
             throw PPTXError.invalidParameter("text", "需要 text")
         }
@@ -1361,8 +1372,8 @@ class PPTXMCPServer {
     }
 
     private func setTransition(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let idx = try slideIndex(args)
+        let (docId, pres) = try requireSession(args: args)
+        let idx = try validSlideIndex(args, in: pres)
         guard let typeStr = args["type"]?.stringValue else {
             throw PPTXError.invalidParameter("type", "需要 type")
         }
@@ -1481,15 +1492,6 @@ class PPTXMCPServer {
 // MARK: - Value Extensions
 
 extension Value {
-    var intValue: Int? {
-        switch self {
-        case .int(let v): return v
-        case .double(let v): return Int(v)
-        case .string(let s): return Int(s)
-        default: return nil
-        }
-    }
-
     var boolValue: Bool? {
         switch self {
         case .bool(let v): return v

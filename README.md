@@ -22,6 +22,10 @@ PowerPoint (.pptx) MCP server — Swift-native PresentationML 解析與生成，
 | `place_picture_at` | 插入圖片（`image_path` 或 `image_base64`）並以 `x_cm` / `y_cm` / `width_cm` 定位；省略 `height_cm` 時依原生像素比例推導 |
 | `fit_picture_to_native_aspect` | 依圖片原生像素比例重算非錨定邊（`anchor` = `width` 或 `height`），位置不變 |
 
+### 整數參數
+
+所有工具的整數參數（`slide_index`、`shape_id`、EMU 單位的 `x` / `y` / `width` / `height`、`columns` / `rows` 等）採同一套驗證：只接受 JSON 數值，且必須是能精確轉成整數的有限值（`3` 與 `3.0` 可以；`"3"`、`true`、`0.5`、`1e300` 不行）；再檢查該參數自己的範圍（投影片索引須在簡報內、EMU 位置須在 OOXML `ST_Coordinate` 範圍、寬高不得為負、表格欄列數為 1–1000）。不合格時回傳 `isError` 的參數錯誤並指出參數名稱，文件不會被修改。
+
 完整清單以 MCP `tools/list` 為準（server instructions 內含兩種模式說明：Direct `source_path` / Session `doc_id`）。
 
 ## 安裝（推薦：Claude Code plugin）

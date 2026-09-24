@@ -8,7 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- 整數參數遇到 NaN、±Infinity、小數或超出 `Int` 範圍的數值時，server 不再 crash（#5）。原本的 `Value.intValue` 以 `Int(Double)` 轉換，遇到這些值直接 trap；它已刪除，所有工具的整數參數改走同一個 `optionalInt`／`requiredInt`（`Int(exactly:)`），無效時回傳指名參數的 `isError` 結果，文件與 dirty 狀態不變。
+- 同一類的其他 crash 一併移除（#5）：多數 session 工具未檢查 `slide_index` 是否在簡報內（陣列越界 trap），現在一律檢查；`insert_table` 的 `columns`／`rows` 為 0 或負數時會除以零或建立無效 range，現在限定 1–1000；`add_slide` 的負 `at_index` 會 trap，現在限定 0 到投影片數。
 - `insert_text_shape`、`insert_table` 的新元素 id 改由與 `insert_image`／`place_picture_at` 相同的配置函式產生（#6）：取整棵 shape tree（含巢狀群組子元素）的最大 id 加一，溢位時回傳錯誤而不是 trap。先前只看頂層元素，群組內已有 id=11 時新元素也會拿到 11，產生重複 id，並讓原本應被拒絕的群組子元素位址改指向新元素。
+
+### Changed
+
+- 整數參數與 v0.2.0 幾何工具採同一套嚴格型別規則（#5）：只接受 JSON 數值（整數，或恰為整數的 double）。先前舊工具會把字串 `"3"` 轉成 3、把 `0.5` 截成 0；現在兩者都回傳參數錯誤。
+- EMU 參數檢查 OOXML 範圍（#5）：`insert_image`、`insert_text_shape`、`insert_table`、`set_shape_position` 的 `x`／`y` 必須在 `ST_Coordinate` 範圍內，`width`／`height`（含 `set_shape_size`）必須介於 0 與 `ST_PositiveCoordinate` 上限之間。先前越界值會被寫進檔案，PowerPoint 開啟時需要修復。
+- `add_slide` 的 `at_index` 大於投影片數時回傳錯誤，不再默默改成加在最後（#5）。
+- `update_shape_text`、`set_shape_position`、`set_shape_size`、`set_shape_fill`、`update_cell` 缺少參數時，錯誤訊息改為指出缺少的是哪一個參數（#5）。
 
 ## [0.2.0] - 2026-09-24
 
