@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
 ### Added
 
 - CI workflow `.github/workflows/ci.yml`（#4）：每次 push 到 main 與每個 PR，在 ubuntu-latest 上跑 shellcheck 與 `scripts/tests/*.sh`（以 glob 收集，新增的 harness 不必改 workflow）。不簽章、不公證、不發布、不讀 secrets。
