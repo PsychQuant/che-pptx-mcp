@@ -5,11 +5,12 @@
 #    scripts/tests/*.sh (by glob, so a new harness is picked up without
 #    editing the workflow) plus shellcheck — and never signs, notarizes,
 #    uploads or reads secrets.
-# 2. README's "Release 流程" section describes the pipeline scripts/release.sh
+# 2. README's "Release 流程" section covers the pipeline scripts/release.sh
 #    actually runs: every "→ [n/7]" step label in the script appears in the
 #    README, together with the isolated-worktree / SOURCE_HEAD / drift-gate
 #    design PR #3 added. A step added to the script without the README
-#    following fails here.
+#    following fails here. (Coverage, not correctness: the prose itself is
+#    reviewed by people.)
 #
 # Refs PsychQuant/che-pptx-mcp#4.
 
@@ -27,18 +28,25 @@ fail() {
 }
 
 # --- 1. CI workflow --------------------------------------------------------
+#
+# A smoke test of the workflow text, not a YAML or Actions validator: full-line
+# comments are dropped first, so a pattern only counts where it is live.
 
 if [[ ! -f "$WORKFLOW" ]]; then
     fail "missing $WORKFLOW"
 else
-    grep -qE '^[[:space:]]*push:' "$WORKFLOW" || fail "workflow does not run on push"
-    grep -qE '^[[:space:]]*pull_request:' "$WORKFLOW" || fail "workflow does not run on pull_request"
-    grep -q 'scripts/tests/\*\.sh' "$WORKFLOW" || fail "workflow does not run scripts/tests/*.sh by glob"
-    grep -qE '^[[:space:]]*(run: )?shellcheck ' "$WORKFLOW" || fail "workflow does not run shellcheck"
+    live=$(grep -vE '^[[:space:]]*#' "$WORKFLOW")
+    # Triggers: the top-level `on:` block, up to the next top-level key.
+    triggers=$(awk '/^on:/{flag=1; next} /^[^[:space:]#]/{flag=0} flag' <<<"$live")
+    grep -qE '^[[:space:]]+push:' <<<"$triggers" || fail "workflow's on: block has no push trigger"
+    grep -qE '^[[:space:]]+pull_request:' <<<"$triggers" || fail "workflow's on: block has no pull_request trigger"
+    grep -qE '\(scripts/tests/\*\.sh\)' <<<"$live" || fail "workflow does not collect scripts/tests/*.sh by glob"
+    # shellcheck disable=SC2016  # a literal `$t` in the workflow text, not an expansion
+    grep -qF 'bash "$t"' <<<"$live" || fail "workflow does not run each collected harness with bash"
+    grep -qE '^[[:space:]]*(run: )?shellcheck scripts/' <<<"$live" || fail "workflow does not run shellcheck on scripts/"
     # No signing, notarization, upload or secrets in CI (release stays a
     # maintainer-run, keychain-backed step).
-    if grep -nE 'codesign|notarytool|scripts/release\.sh|gh release|secrets\.' "$WORKFLOW" \
-        | grep -vE '^[0-9]+:[[:space:]]*#'; then
+    if grep -nE 'codesign|notarytool|scripts/release\.sh|gh release|secrets\.' <<<"$live"; then
         fail "workflow must not sign, notarize, release or use secrets (lines above)"
     fi
 fi
@@ -63,4 +71,4 @@ if (( failures > 0 )); then
     echo "$failures check(s) failed" >&2
     exit 1
 fi
-echo "PASS: CI runs every scripts/tests harness + shellcheck without signing, and README's Release section matches release.sh"
+echo "PASS: CI workflow runs every scripts/tests harness + shellcheck without signing; README's Release section covers every release.sh step"
