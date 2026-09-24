@@ -696,6 +696,10 @@ class PPTXMCPServer {
     /// tree — group children included, so a new element can never share an id
     /// with (and shadow) an element inside a group — and at least 2. Throws
     /// instead of overflowing when an id is already `Int.max`.
+    ///
+    /// The single id allocator for every tool that adds an element
+    /// (`insert_image`, `place_picture_at`, `insert_text_shape`,
+    /// `insert_table` — #6).
     private func nextElementId(in slide: Slide) throws -> Int {
         let maxId = maxElementId(in: slide.elements) ?? 1
         let (next, overflow) = maxId.addingReportingOverflow(1)
@@ -796,14 +800,7 @@ class PPTXMCPServer {
         let colWidth = w / cols
         let rowHeight = h / rows
 
-        let nextId = (openPresentations[docId]?.slides[idx].elements.compactMap { el -> Int? in
-            switch el {
-            case .shape(let s): return s.id
-            case .picture(let p): return p.id
-            case .graphicFrame(let f): return f.id
-            case .group(let g): return g.id
-            }
-        }.max() ?? 1) + 1
+        let nextId = try nextElementId(in: openPresentations[docId]!.slides[idx])
 
         let table = DrawingTable(
             columns: (0..<cols).map { _ in TableColumn(width: colWidth) },
@@ -895,14 +892,7 @@ class PPTXMCPServer {
         let w = args["width"]?.intValue ?? 8229600
         let h = args["height"]?.intValue ?? 1143000
 
-        let nextId = (openPresentations[docId]?.slides[idx].elements.compactMap { el -> Int? in
-            switch el {
-            case .shape(let s): return s.id
-            case .picture(let p): return p.id
-            case .graphicFrame(let f): return f.id
-            case .group(let g): return g.id
-            }
-        }.max() ?? 1) + 1
+        let nextId = try nextElementId(in: openPresentations[docId]!.slides[idx])
 
         let shape = Shape(
             id: nextId, name: "TextBox \(nextId)",
