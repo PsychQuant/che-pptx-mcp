@@ -33,6 +33,12 @@ struct IntegerParameterTests {
             "doc_id": doc, "slide_index": .int(0),
             "base64": .string(try Self.png().base64EncodedString()), "file_name": .string("p.png"),
         ])
+        // Re-install the built deck as a clean session, so a rejected call
+        // that wrongly marks it dirty shows up in `snapshot()` (review round 1,
+        // MEDIUM 5).
+        let built = try #require(server.openPresentations[Self.docId])
+        server.initializeSession(docId: Self.docId, presentation: built, sourcePath: nil, autosave: false)
+        try #require(server.dirtyState[Self.docId] == false)
     }
 
     // MARK: - A valid call for every tool that takes an integer
@@ -222,6 +228,67 @@ struct IntegerParameterTests {
         edge["rows"] = .int(1)
         let result = try await call("insert_table", edge)
         #expect(!result.isError, "\(result.text)")
+    }
+
+    /// Parameters that must be present, per tool (the optional ones — EMU
+    /// geometry and `at_index` — fall back to a default when absent or null).
+    static let requiredIntegerParameters: [(tool: String, key: String)] = integerParameters.filter { pair in
+        !["x", "y", "width", "height", "at_index"].contains(pair.key)
+            || ["set_shape_position", "set_shape_size"].contains(pair.tool)
+    }
+
+    @Test(arguments: requiredIntegerParameters)
+    func `A missing or null required integer is an isError result naming it`(tool: String, key: String) async throws {
+        let before = try snapshot()
+        for absent: Value? in [nil, .null] {
+            var args = try #require(Self.validCalls[tool])
+            args[key] = absent
+            if absent == nil { args.removeValue(forKey: key) }
+            let result = try await call(tool, args)
+            #expect(result.isError, "\(tool).\(key)=\(String(describing: absent)): \(result.text)")
+            #expect(result.text.contains(key), "\(result.text)")
+        }
+        #expect(try snapshot() == before)
+    }
+
+    // MARK: - Review round 1, MEDIUM 3: indices checked by the server
+
+    @Test func `update_cell rejects a row or column outside the table, naming the parameter`() async throws {
+        let before = try snapshot()
+        for (key, bad) in [("row", -1), ("row", 2), ("row", Int.max), ("row", Int.min),
+                           ("col", -1), ("col", 2), ("col", Int.max), ("col", Int.min)] {
+            var args = try #require(Self.validCalls["update_cell"])
+            args[key] = .int(bad)
+            let result = try await call("update_cell", args)
+            #expect(result.isError, "\(key)=\(bad): \(result.text)")
+            #expect(result.text.contains(key), "\(key)=\(bad): \(result.text)")
+        }
+        #expect(try snapshot() == before)
+    }
+
+    @Test func `update_cell on a graphic frame without a table is an error, not a silent success`() async throws {
+        var pres = try #require(server.openPresentations[Self.docId])
+        pres.slides[0].elements.append(.graphicFrame(GraphicFrame(id: 50, name: "Chart")))
+        server.initializeSession(docId: Self.docId, presentation: pres, sourcePath: nil, autosave: false)
+        let before = try snapshot()
+        var args = try #require(Self.validCalls["update_cell"])
+        args["shape_id"] = .int(50)
+        let result = try await call("update_cell", args)
+        #expect(result.isError, "\(result.text)")
+        #expect(try snapshot() == before)
+    }
+
+    @Test func `reorder_slides rejects indices outside the deck, naming the parameter`() async throws {
+        let before = try snapshot()
+        for (key, bad) in [("from_index", -1), ("from_index", 2), ("from_index", Int.max), ("from_index", Int.min),
+                           ("to_index", -1), ("to_index", 2), ("to_index", Int.max), ("to_index", Int.min)] {
+            var args = try #require(Self.validCalls["reorder_slides"])
+            args[key] = .int(bad)
+            let result = try await call("reorder_slides", args)
+            #expect(result.isError, "\(key)=\(bad): \(result.text)")
+            #expect(result.text.contains(key), "\(key)=\(bad): \(result.text)")
+        }
+        #expect(try snapshot() == before)
     }
 
     @Test func `add_slide takes an insertion point from 0 through the slide count`() async throws {
