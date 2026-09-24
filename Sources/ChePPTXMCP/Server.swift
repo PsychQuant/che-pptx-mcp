@@ -803,7 +803,20 @@ class PPTXMCPServer {
             throw PPTXError.invalidParameter("shape_id", "找不到表格 id=\(shapeId)")
         }
 
-        try frame.table?.updateCell(row: row, col: col, text: text)
+        // The indices are checked here, against this table, so the error names
+        // the parameter; a frame with no table (a chart, SmartArt, …) is not
+        // a silent no-op.
+        guard var table = frame.table else {
+            throw PPTXError.invalidParameter("shape_id", "id=\(shapeId) 不是表格")
+        }
+        guard row >= 0, row < table.rows.count else {
+            throw PPTXError.invalidParameter("row", "必須介於 0 與 \(table.rows.count - 1) 之間（收到 \(row)）")
+        }
+        guard col >= 0, col < table.rows[row].cells.count else {
+            throw PPTXError.invalidParameter("col", "必須介於 0 與 \(table.rows[row].cells.count - 1) 之間（收到 \(col)）")
+        }
+        try table.updateCell(row: row, col: col, text: text)
+        frame.table = table
         openPresentations[docId]?.slides[idx].elements[elIdx] = .graphicFrame(frame)
         markDirty(docId)
         return "已更新儲存格 (\(row),\(col))"
@@ -833,9 +846,9 @@ class PPTXMCPServer {
     }
 
     private func reorderSlides(args: [String: Value]) throws -> String {
-        let (docId, _) = try requireSession(args: args)
-        let from = try requiredInt(args, "from_index")
-        let to = try requiredInt(args, "to_index")
+        let (docId, pres) = try requireSession(args: args)
+        let from = try requiredIndex(args, "from_index", count: pres.slides.count)
+        let to = try requiredIndex(args, "to_index", count: pres.slides.count)
         try openPresentations[docId]?.reorderSlide(from: from, to: to)
         markDirty(docId)
         return "已將投影片從位置 \(from) 移到 \(to)"
@@ -1184,6 +1197,19 @@ class PPTXMCPServer {
     private func requiredInt(_ args: [String: Value], _ key: String, in range: ClosedRange<Int>) throws -> Int {
         guard let value = try optionalInt(args, key, in: range) else {
             throw PPTXError.invalidParameter(key, "需要 \(key)")
+        }
+        return value
+    }
+
+    /// A required index into a collection of `count` items (`0 ..< count`).
+    /// Checked without forming a range, so an empty collection is an error
+    /// rather than an invalid `ClosedRange`.
+    private func requiredIndex(_ args: [String: Value], _ key: String, count: Int) throws -> Int {
+        let value = try requiredInt(args, key)
+        guard value >= 0, value < count else {
+            throw PPTXError.invalidParameter(
+                key, count == 0 ? "簡報沒有投影片（收到 \(value)）" : "必須介於 0 與 \(count - 1) 之間（收到 \(value)）"
+            )
         }
         return value
     }
