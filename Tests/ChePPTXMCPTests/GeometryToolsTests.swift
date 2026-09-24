@@ -366,6 +366,62 @@ final class GeometryToolsTests: XCTestCase {
         XCTAssertEqual(try snapshot(), before)
     }
 
+    // MARK: - Review round 2, MEDIUM 2: new ids never collide with group children
+
+    private func installGroupedSession(docId: String, groupChildren: [SlideElement]) {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [
+            .shape(Shape(id: 2, name: "Title", size: Size(width: 914400, height: 914400))),
+            .group(GroupShape(id: 10, name: "Group", elements: groupChildren)),
+        ]
+        server.initializeSession(docId: docId, presentation: pres, sourcePath: nil, autosave: false)
+    }
+
+    func testPlacePictureAllocatesAnIdAboveGroupChildren() throws {
+        installGroupedSession(docId: "grp", groupChildren: [
+            .picture(PPTXSwift.Picture(id: 11, name: "child", size: Size(width: 3600000, height: 1800000))),
+        ])
+        var args = pictureArgs(base64: try fourByThreePNG(), 2.0, 3.0, 10.0)
+        args["doc_id"] = .string("grp")
+        let placed = try json(call("place_picture_at", args))
+        XCTAssertEqual(placed["shape_id"] as? Int, 12)
+
+        // id 11 still names the group child, so it keeps taking the rejection path…
+        let slide = try XCTUnwrap(server.openPresentations["grp"]).slides[0]
+        XCTAssertEqual(slide.locateElement(id: 11), .groupChild(groupId: 10))
+        var moveChild = geometryArgs(11, 5.0, 5.0, 10.0, 7.5)
+        moveChild["doc_id"] = .string("grp")
+        XCTAssertThrowsError(try call("set_placeholder_geometry", moveChild)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("群組"), "\(error.localizedDescription)")
+        }
+        // …and the new picture is addressable under its own id.
+        var moveNew = geometryArgs(12, 5.0, 5.0, 10.0, 7.5)
+        moveNew["doc_id"] = .string("grp")
+        XCTAssertNoThrow(try call("set_placeholder_geometry", moveNew))
+    }
+
+    func testIdAllocationLooksThroughNestedGroups() throws {
+        installGroupedSession(docId: "nested", groupChildren: [
+            .shape(Shape(id: 11, name: "child")),
+            .group(GroupShape(id: 20, name: "Inner", elements: [.shape(Shape(id: 30, name: "grandchild"))])),
+        ])
+        let inserted = try call("insert_image", [
+            "doc_id": .string("nested"), "slide_index": .int(0),
+            "base64": .string(fourByThreePNG()), "file_name": .string("n.png"),
+            "x": .int(0), "y": .int(0), "width": .int(3600000), "height": .int(2700000),
+        ])
+        XCTAssertEqual(inserted, "已插入圖片: n.png (id=31)")
+    }
+
+    func testIdAllocationOverflowInsideAGroupIsAnErrorNotATrap() throws {
+        installGroupedSession(docId: "maxid", groupChildren: [.shape(Shape(id: Int.max, name: "child"))])
+        let before = try snapshot("maxid")
+        var args = pictureArgs(base64: try fourByThreePNG(), 2.0, 3.0, 10.0)
+        args["doc_id"] = .string("maxid")
+        XCTAssertThrowsError(try call("place_picture_at", args))
+        XCTAssertEqual(try snapshot("maxid"), before)
+    }
+
     // MARK: - Review MEDIUM 3: parameter types are validated, never coerced
 
     func testNumericParametersRejectStringsAndBooleans() throws {
