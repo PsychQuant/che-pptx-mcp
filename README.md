@@ -46,10 +46,26 @@ swift build -c release   # binary at .build/release/ChePPTXMCP
 ## Release 流程（maintainer）
 
 ```bash
-scripts/release.sh <version>
+scripts/release.sh <version>   # 例：scripts/release.sh 0.3.0（不加 v）
 ```
 
-Pipeline：版本同步 gate（source 常數 = release 版本）→ universal build → Developer ID codesign → pre-upload 簽章 gate → notarize（必須 Accepted）→ sha256 → `gh release create`。詳見 script header（PsychQuant/macdoc#119）。
+發布前先把 `Sources/ChePPTXMCP/Server.swift` 的 `serverVersion` 改成要發布的版本、更新 CHANGELOG 並 commit；script 從**目前 HEAD** 發布。步驟與 `scripts/release.sh` 的輸出一一對應：
+
+| 步驟 | 內容 |
+|------|------|
+| `[0/7]` pre-flight | notary profile（keychain `che-mcps-notary`）可用；工作樹完全乾淨（含 untracked 檔）；記下 `SOURCE_HEAD`；本機 tag、remote tag、GitHub release 都還不存在。接著以 `git worktree add --detach` 在暫存目錄建立 `SOURCE_HEAD` 的**隔離 worktree**，之後的建置都在那裡進行，主工作樹在建置期間的修改與舊的 `.build` 狀態都不會混入 |
+| `[0.5/7]` 版本同步 gate | 隔離 worktree 裡的 `serverVersion` 必須等於 `<version>` |
+| `[1/7]` universal build | 在隔離 worktree 建置 arm64 + x86_64；binary 位置以 `swift build --show-bin-path` 查詢，不寫死路徑。建置後的 **drift gate**：隔離 worktree 的 HEAD 仍須是 `SOURCE_HEAD` 且沒有任何變更，否則在簽章前以 `exit 3` 中止 |
+| `[2/7]` codesign | Developer ID、hardened runtime、timestamp |
+| `[3/7]` 上傳前簽章 gate | 以與 marketplace wrapper 相同的 requirement（Team `6W377FS7BS`）驗證，並確認是 universal binary |
+| `[4/7]` notarize | 必須 `Accepted` |
+| `[5/7]` sha256 | 產生 `ChePPTXMCP.sha256` |
+| `[6/7]` 最終 gate | 對實際要上傳的檔案再驗一次簽章與 sha256（TOCTOU 防護） |
+| `[7/7]` gh release | `gh release create --target SOURCE_HEAD`：tag 建在被建置的那個 commit 上，而不是發布當下的 HEAD |
+
+結束碼：`2` 參數錯誤、`3` pre-flight 或 drift gate 失敗、`4` 找不到 binary、`5` 簽章 gate 失敗、`6` notarization 未通過。任一 gate 失敗都發生在上傳之前。
+
+`scripts/tests/` 的 harness 以假的 `swift`／`codesign`／`xcrun`／`gh` 模擬整條 pipeline（drift 必須在簽章前中止、tag 釘在 `SOURCE_HEAD`、binary 路徑來自 `--show-bin-path`），CI（`.github/workflows/ci.yml`）在每次 push 到 main 與每個 PR 執行它們與 shellcheck；CI 不簽章、不公證、不發布。詳見 script header（PsychQuant/macdoc#119、PR #3）。
 
 ## License
 

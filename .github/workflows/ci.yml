@@ -1,0 +1,62 @@
+name: CI
+
+# Runs the release-pipeline harnesses in scripts/tests/ and shellcheck on
+# every push to main and every pull request (PsychQuant/che-pptx-mcp#4).
+# Before this there was no workflow at all, so `gh pr checks` reported "no
+# checks" and the release-pipeline fix in PR #3 sat for a month without a
+# single machine run of its own tests.
+#
+# Why ubuntu-latest: the harnesses replace every macOS-only tool that
+# scripts/release.sh calls (swift, codesign, xcrun, lipo, ditto, gh) with
+# fakes on PATH; the real tools they still use — bash, git, mktemp, awk,
+# sed, grep, shasum (Perl) — are all on the Ubuntu image, as is shellcheck.
+#
+# Deliberately not here: signing, notarization, `scripts/release.sh`
+# itself, and secrets. Releases stay a maintainer-run step backed by the
+# local keychain. `swift test` needs macOS (ImageIO / CoreGraphics) and is
+# out of scope for this lightweight job.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tool versions
+        run: |
+          bash --version | head -1
+          git --version
+          shellcheck --version | head -2
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh scripts/tests/*.sh
+
+      - name: scripts/tests harnesses
+        run: |
+          shopt -s nullglob
+          tests=(scripts/tests/*.sh)
+          if (( ${#tests[@]} == 0 )); then
+            echo "::error::no scripts/tests/*.sh found"
+            exit 1
+          fi
+          failed=0
+          for t in "${tests[@]}"; do
+            echo "::group::$t"
+            if bash "$t"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error file=$t::$t failed"
+              failed=1
+            fi
+          done
+          exit "$failed"
