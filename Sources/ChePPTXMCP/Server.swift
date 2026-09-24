@@ -519,7 +519,7 @@ class PPTXMCPServer {
             throw PPTXError.invalidParameter("doc_id", "需要 doc_id")
         }
         try refuseReplacingUnsavedSession(docId)
-        let autosave = args["autosave"]?.boolValue ?? false
+        let autosave = try optionalBool(args, "autosave") ?? false
         let presentation = PptxWriter.createNew()
         initializeSession(docId: docId, presentation: presentation, sourcePath: nil, autosave: autosave)
         return "已建立新簡報: \(docId)（1 張空白投影片）"
@@ -533,7 +533,7 @@ class PPTXMCPServer {
             throw PPTXError.invalidParameter("doc_id", "需要 doc_id")
         }
         try refuseReplacingUnsavedSession(docId)
-        let autosave = args["autosave"]?.boolValue ?? false
+        let autosave = try optionalBool(args, "autosave") ?? false
 
         let presentation = try PptxReader.read(from: URL(fileURLWithPath: path))
         initializeSession(docId: docId, presentation: presentation, sourcePath: path, autosave: autosave)
@@ -1253,6 +1253,34 @@ class PPTXMCPServer {
         return value
     }
 
+    // MARK: Boolean parameters (#10)
+    //
+    // Every boolean tool parameter goes through `optionalBool`: only the
+    // JSON literals `true`/`false` are accepted, mirroring the integer rule
+    // from #5. Strings ("true", "false", "1", ...), numbers and other JSON
+    // types are rejected, never coerced — the old `Value.boolValue` used to
+    // accept the string "true" (and, as an unintended side effect, coerce
+    // every OTHER string, including "false", to `false` instead of
+    // rejecting it). A value that fails is a `PPTXError.invalidParameter`
+    // naming the key, which `handleToolCall` returns as an `isError` result.
+
+    /// The value under `key`, or nil when it is absent or JSON null. There
+    /// is deliberately no `requiredBool` sibling to `requiredInt`: every
+    /// boolean parameter in the current tool schemas (`autosave` on
+    /// `create_presentation` / `open_presentation`) is optional with a
+    /// `false` default, and an untested helper with no call site is dead
+    /// code — add `requiredBool` alongside its own test when a tool needs one.
+    private func optionalBool(_ args: [String: Value], _ key: String) throws -> Bool? {
+        switch args[key] {
+        case nil, .null?:
+            return nil
+        case .bool(let value)?:
+            return value
+        case let other?:
+            throw PPTXError.invalidParameter(key, "必須是布林值 true/false，不接受 \(jsonTypeName(other))")
+        }
+    }
+
     /// An optional EMU position (`ST_Coordinate`), `fallback` when absent.
     private func coordinateEmu(_ args: [String: Value], _ key: String, default fallback: Int) throws -> Int {
         try optionalInt(args, key, in: PPTXMetric.coordinateRangeEmu) ?? fallback
@@ -1558,17 +1586,5 @@ class PPTXMCPServer {
             let phs = layout.placeholders.map { "\($0.type.rawValue)" }.joined(separator: ", ")
             return "Layout id=\(layout.id) name=\"\(layout.name)\" type=\(layout.type ?? "n/a") placeholders=[\(phs)]"
         }.joined(separator: "\n")
-    }
-}
-
-// MARK: - Value Extensions
-
-extension Value {
-    var boolValue: Bool? {
-        switch self {
-        case .bool(let v): return v
-        case .string(let s): return s == "true" || s == "1"
-        default: return nil
-        }
     }
 }
