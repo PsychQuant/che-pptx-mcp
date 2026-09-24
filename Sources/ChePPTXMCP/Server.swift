@@ -1083,7 +1083,7 @@ class PPTXMCPServer {
         let (docId, pres) = try requireSession(args: args)
         let idx = try validSlideIndex(args, in: pres)
         let shapeId = try requiredShapeId(args)
-        guard let anchorName = args["anchor"]?.stringValue,
+        guard let anchorName = try optionalString(args, "anchor"),
               let anchor = AspectAnchor(rawValue: anchorName) else {
             throw PPTXError.invalidParameter("anchor", "必須是 width 或 height")
         }
@@ -1150,17 +1150,36 @@ class PPTXMCPServer {
 
     // MARK: Geometry helpers
 
+    // Parameter parsing for the geometry tools is strict: a value is taken
+    // only from the JSON type the schema declares, never coerced from another
+    // (a string "10" is not a number). An absent key and an explicit JSON
+    // null both mean "not given".
+
     private func validSlideIndex(_ args: [String: Value], in pres: Presentation) throws -> Int {
-        let idx = try slideIndex(args)
+        let idx = try requiredInt(args, "slide_index")
         guard idx >= 0 && idx < pres.slides.count else { throw PPTXError.invalidIndex(idx) }
         return idx
     }
 
     private func requiredShapeId(_ args: [String: Value]) throws -> Int {
-        guard let shapeId = args["shape_id"]?.intValue else {
-            throw PPTXError.invalidParameter("shape_id", "需要 shape_id")
+        try requiredInt(args, "shape_id")
+    }
+
+    /// A JSON integer, or a finite integral double that fits `Int`.
+    private func requiredInt(_ args: [String: Value], _ key: String) throws -> Int {
+        switch args[key] {
+        case .int(let value)?:
+            return value
+        case .double(let value)?:
+            guard let exact = Int(exactly: value) else {
+                throw PPTXError.invalidParameter(key, "必須是整數（收到 \(value)）")
+            }
+            return exact
+        case nil, .null?:
+            throw PPTXError.invalidParameter(key, "需要 \(key)")
+        case let other?:
+            throw PPTXError.invalidParameter(key, "必須是整數，不接受 \(jsonTypeName(other))")
         }
-        return shapeId
     }
 
     private func requiredCm(_ args: [String: Value], _ key: String) throws -> Double {
@@ -1170,17 +1189,50 @@ class PPTXMCPServer {
         return value
     }
 
+    /// A JSON number (integer or double). Finiteness and range are checked by
+    /// PPTXSwift's geometry validation.
     private func optionalCm(_ args: [String: Value], _ key: String) throws -> Double? {
-        guard let raw = args[key], raw != .null else { return nil }
-        guard let value = raw.doubleValue else {
-            throw PPTXError.invalidParameter(key, "必須是數值（公分）")
+        switch args[key] {
+        case nil, .null?:
+            return nil
+        case .int(let value)?:
+            return Double(value)
+        case .double(let value)?:
+            return value
+        case let other?:
+            throw PPTXError.invalidParameter(key, "必須是數值（公分），不接受 \(jsonTypeName(other))")
         }
-        return value
     }
 
-    /// Exactly one of `image_path` / `image_base64`, with a media file name for it.
+    private func optionalString(_ args: [String: Value], _ key: String) throws -> String? {
+        switch args[key] {
+        case nil, .null?:
+            return nil
+        case .string(let value)?:
+            return value
+        case let other?:
+            throw PPTXError.invalidParameter(key, "必須是字串，不接受 \(jsonTypeName(other))")
+        }
+    }
+
+    private func jsonTypeName(_ value: Value) -> String {
+        switch value {
+        case .null: return "null"
+        case .bool: return "布林值"
+        case .int, .double: return "數值"
+        case .string: return "字串"
+        case .data: return "二進位資料"
+        case .array: return "陣列"
+        case .object: return "物件"
+        }
+    }
+
+    /// Exactly one of `image_path` / `image_base64` (each must be a string
+    /// when given), with a media file name for it.
     private func pictureSource(_ args: [String: Value]) throws -> (data: Data, fileName: String) {
-        switch (args["image_path"]?.stringValue, args["image_base64"]?.stringValue) {
+        let path = try optionalString(args, "image_path")
+        let base64 = try optionalString(args, "image_base64")
+        switch (path, base64) {
         case (let path?, nil):
             guard FileManager.default.fileExists(atPath: path) else { throw PPTXError.fileNotFound(path) }
             let url = URL(fileURLWithPath: path)
@@ -1436,15 +1488,6 @@ extension Value {
         case .int(let v): return v
         case .double(let v): return Int(v)
         case .string(let s): return Int(s)
-        default: return nil
-        }
-    }
-
-    var doubleValue: Double? {
-        switch self {
-        case .double(let v): return v
-        case .int(let v): return Double(v)
-        case .string(let s): return Double(s)
         default: return nil
         }
     }

@@ -366,6 +366,112 @@ final class GeometryToolsTests: XCTestCase {
         XCTAssertEqual(try snapshot(), before)
     }
 
+    // MARK: - Review MEDIUM 3: parameter types are validated, never coerced
+
+    func testNumericParametersRejectStringsAndBooleans() throws {
+        let shapeId = try insertTextShape()
+        let before = try snapshot()
+        for key in ["x_cm", "y_cm", "width_cm", "height_cm"] {
+            for bad: Value in [.string("10"), .bool(true), .array([.int(1)])] {
+                var args = geometryArgs(shapeId, 2.0, 3.0, 10.0, 7.5)
+                args[key] = bad
+                XCTAssertThrowsError(try call("set_placeholder_geometry", args), "\(key)=\(bad)") { error in
+                    XCTAssertTrue(error.localizedDescription.contains(key), "\(error.localizedDescription)")
+                }
+            }
+        }
+        for key in ["slide_index", "shape_id"] {
+            for bad: Value in [.string("0"), .bool(false), .double(0.5), .double(.nan), .double(1e300)] {
+                var args = geometryArgs(shapeId, 2.0, 3.0, 10.0, 7.5)
+                args[key] = bad
+                XCTAssertThrowsError(try call("set_placeholder_geometry", args), "\(key)=\(bad)") { error in
+                    XCTAssertTrue(error.localizedDescription.contains(key), "\(error.localizedDescription)")
+                }
+            }
+        }
+        XCTAssertEqual(try snapshot(), before)
+    }
+
+    func testIntegralDoublesAreAcceptedForIntegerParameters() throws {
+        let shapeId = try insertTextShape()
+        var args = geometryArgs(shapeId, 2.0, 3.0, 10.0, 7.5)
+        args["shape_id"] = .double(Double(shapeId))
+        args["slide_index"] = .double(0)
+        XCTAssertNoThrow(try call("set_placeholder_geometry", args))
+    }
+
+    func testNonFiniteAndHugeCentimetersAreRejectedWithoutMutation() throws {
+        let shapeId = try insertTextShape()
+        _ = try call("set_placeholder_geometry", geometryArgs(shapeId, 2.0, 3.0, 10.0, 7.5))
+        let before = try snapshot()
+        for bad in [Double.nan, .infinity, -.infinity, .greatestFiniteMagnitude, 1e300, -1e300] {
+            for key in ["x_cm", "y_cm", "width_cm", "height_cm"] {
+                var args = geometryArgs(shapeId, 2.0, 3.0, 10.0, 7.5)
+                args[key] = .double(bad)
+                XCTAssertThrowsError(try call("set_placeholder_geometry", args), "\(key)=\(bad)")
+            }
+            for key in ["x_cm", "y_cm", "width_cm", "height_cm"] {
+                var args = pictureArgs(base64: try fourByThreePNG(), 2.0, 3.0, 10.0)
+                args[key] = .double(bad)
+                XCTAssertThrowsError(try call("place_picture_at", args), "\(key)=\(bad)")
+            }
+        }
+        XCTAssertEqual(try snapshot(), before)
+    }
+
+    func testImageSourcesAreValidatedByTypeAndExactlyOneIsRequired() throws {
+        let png = try fourByThreePNG()
+        let before = try snapshot()
+        let badCases: [(label: String, path: Value?, base64: Value?)] = [
+            ("wrong-typed path next to valid base64", .int(5), .string(png)),
+            ("wrong-typed base64 next to valid path", .string("/tmp/x.png"), .bool(true)),
+            ("wrong-typed path alone", .array([.string("/tmp/x.png")]), nil),
+            ("wrong-typed base64 alone", nil, .int(1)),
+            ("both present", .string("/tmp/x.png"), .string(png)),
+            ("neither present", nil, nil),
+            ("both null", .null, .null),
+        ]
+        for c in badCases {
+            var args = pictureArgs(base64: nil, 2.0, 3.0, 10.0)
+            if let path = c.path { args["image_path"] = path }
+            if let base64 = c.base64 { args["image_base64"] = base64 }
+            XCTAssertThrowsError(try call("place_picture_at", args), c.label) { error in
+                XCTAssertTrue(error.localizedDescription.contains("image_"), "\(c.label): \(error.localizedDescription)")
+            }
+            XCTAssertEqual(try snapshot(), before, c.label)
+        }
+    }
+
+    func testExplicitNullImageSourceCountsAsAbsent() throws {
+        var args = pictureArgs(base64: try fourByThreePNG(), 2.0, 3.0, 10.0)
+        args["image_path"] = .null
+        args["height_cm"] = .null
+        let response = try json(call("place_picture_at", args))
+        XCTAssertEqual(response["height_source"] as? String, "native_aspect")
+    }
+
+    func testFailuresLeaveTheWholeSessionAndDirtyFlagUnchanged() throws {
+        // A clean session (not dirty) must stay clean through every rejected call.
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: 2, name: "Title", size: Size(width: 914400, height: 914400)))]
+        server.initializeSession(docId: "clean", presentation: pres, sourcePath: nil, autosave: false)
+        let before = try snapshot("clean")
+        XCTAssertEqual(server.dirtyState["clean"], false)
+
+        var bad = geometryArgs(2, 2.0, 3.0, 0.0, 7.5)
+        bad["doc_id"] = .string("clean")
+        XCTAssertThrowsError(try call("set_placeholder_geometry", bad))
+        var pic = pictureArgs(base64: "@@@not-base64@@@", 2.0, 3.0, 10.0)
+        pic["doc_id"] = .string("clean")
+        XCTAssertThrowsError(try call("place_picture_at", pic))
+        var fit = fitArgs(2, "width")
+        fit["doc_id"] = .string("clean")
+        XCTAssertThrowsError(try call("fit_picture_to_native_aspect", fit))
+
+        XCTAssertEqual(try snapshot("clean"), before)
+        XCTAssertEqual(server.dirtyState["clean"], false)
+    }
+
     // MARK: - Helpers
 
     private func call(_ name: String, _ args: [String: Value]) throws -> String {
