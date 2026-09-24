@@ -63,7 +63,7 @@ scripts/release.sh <version>   # 例：scripts/release.sh 0.3.0（不加 v）
 | `[6/7]` 最終 gate | 對實際要上傳的檔案再驗一次簽章與 sha256（TOCTOU 防護） |
 | `[7/7]` gh release | `gh release create --target SOURCE_HEAD`：tag 建在被建置的那個 commit 上，而不是發布當下的 HEAD |
 
-結束碼：`2` 參數錯誤、`3` pre-flight 或 drift gate 失敗、`4` 找不到 binary、`5` 簽章 gate 失敗、`6` notarization 未通過。任一 gate 失敗都發生在上傳之前。
+script 自己設定的結束碼：`2` 參數錯誤、`3` pre-flight 或 drift gate 失敗、`4` 找不到 binary、`5` 簽章 gate 失敗、`6` notarization 結果不是 `Accepted`。其他外部指令本身執行失敗（build、`codesign`、`notarytool` 無法送出、`gh` 等）時，`set -e` 會以該指令自己的結束碼中止。所有 gate 都在建立 GitHub release 與上傳資產之前；注意 `[4/7]` 已把 binary 送交 Apple 公證，`[6/7]` 最終 gate 是在送公證之後、GitHub 上傳之前。
 
 `scripts/tests/` 的 harness 以假的 `swift`／`codesign`／`xcrun`／`gh` 模擬整條 pipeline（drift 必須在簽章前中止、tag 釘在 `SOURCE_HEAD`、binary 路徑來自 `--show-bin-path`），CI（`.github/workflows/ci.yml`）在每次 push 到 main 與每個 PR 執行它們與 shellcheck；CI 不簽章、不公證、不發布。詳見 script header（PsychQuant/macdoc#119、PR #3）。
 
