@@ -19,6 +19,9 @@ class PPTXMCPServer {
     private var originalPaths: [String: String] = [:]
     private(set) var dirtyState: [String: Bool] = [:]
     private var autosaveState: [String: Bool] = [:]
+    /// Autosave failure recorded by `markDirty` during the current tool call;
+    /// `handleToolCall` appends it to the result so the caller learns of it.
+    private var autosaveFailure: String?
 
     // MARK: - Server Instructions
 
@@ -79,11 +82,19 @@ class PPTXMCPServer {
         autosaveState.removeValue(forKey: docId)
     }
 
+    /// Marks the session modified and, with autosave on, writes it back.
+    /// The dirty flag is cleared only when that write succeeds: a failed
+    /// autosave keeps the session dirty — so `close_presentation` still
+    /// refuses to drop it — and is reported through `autosaveFailure`.
     private func markDirty(_ docId: String) {
         dirtyState[docId] = true
-        if autosaveState[docId] == true, let path = originalPaths[docId] {
-            try? PptxWriter.write(openPresentations[docId]!, to: URL(fileURLWithPath: path))
-            dirtyState[docId] = false
+        if autosaveState[docId] == true, let path = originalPaths[docId], let pres = openPresentations[docId] {
+            do {
+                try PptxWriter.write(pres, to: URL(fileURLWithPath: path))
+                dirtyState[docId] = false
+            } catch {
+                autosaveFailure = "自動存檔失敗（\(path)）：\(error.localizedDescription)。變更仍在記憶體中，請以 save_presentation 另存或重試"
+            }
         }
     }
 
@@ -137,8 +148,13 @@ class PPTXMCPServer {
         let name = params.name
         let args = params.arguments ?? [:]
 
+        autosaveFailure = nil
         do {
-            let result = try executeToolTask(name: name, args: args)
+            var result = try executeToolTask(name: name, args: args)
+            if let failure = autosaveFailure {
+                result += "\n警告：\(failure)"
+                autosaveFailure = nil
+            }
             return CallTool.Result(content: [.text(result)])
         } catch {
             return CallTool.Result(content: [.text("Error: \(error.localizedDescription)")], isError: true)
@@ -721,8 +737,13 @@ class PPTXMCPServer {
         let (docId, pres) = try requireSession(args: args)
         let idx = try validSlideIndex(args, in: pres)
         let shapeId = try requiredShapeId(args)
-        guard let elIdx = findElement(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
+        // Pictures only: findElement also matches shapes, tables and groups,
+        // and deleting one of those through an image tool loses content.
+        guard let elIdx = findElement(in: pres.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
+        }
+        guard case .picture = pres.slides[idx].elements[elIdx] else {
+            throw PPTXError.invalidParameter("shape_id", "id=\(shapeId) 不是圖片；delete_image 只刪除圖片，其他元素請用 delete_shape")
         }
         openPresentations[docId]?.slides[idx].elements.remove(at: elIdx)
         markDirty(docId)
