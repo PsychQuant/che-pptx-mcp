@@ -670,19 +670,26 @@ class PPTXMCPServer {
     /// One more than the largest element id anywhere in the slide's shape
     /// tree — group children included, so a new element can never share an id
     /// with (and shadow) an element inside a group — and at least 2. Throws
-    /// instead of overflowing when an id is already `Int.max`.
+    /// when the largest id has already reached `maxDrawingElementId`
+    /// (`UInt32.max`), which also rules out `Int` overflow.
     ///
     /// The single id allocator for every tool that adds an element
     /// (`insert_image`, `place_picture_at`, `insert_text_shape`,
     /// `insert_table` — #6).
     private func nextElementId(in slide: Slide) throws -> Int {
-        let maxId = maxElementId(in: slide.elements) ?? 1
-        let (next, overflow) = maxId.addingReportingOverflow(1)
-        guard !overflow else {
-            throw PPTXError.invalidParameter("shape_id", "投影片上已有 id=\(maxId) 的元素，無法再配置新 id")
+        let maxId = max(maxElementId(in: slide.elements) ?? 1, 1)
+        guard maxId < Self.maxDrawingElementId else {
+            throw PPTXError.invalidParameter(
+                "shape_id",
+                "投影片上已有 id=\(maxId) 的元素，已達 DrawingML 元素 id 上限 \(Self.maxDrawingElementId)，無法再配置新 id"
+            )
         }
-        return next
+        return maxId + 1
     }
+
+    /// `p:cNvPr/@id` is `ST_DrawingElementId`, an `xsd:unsignedInt`: an id
+    /// above this would make the saved file invalid (review round 1, HIGH 1).
+    static let maxDrawingElementId = Int(UInt32.max)
 
     private func maxElementId(in elements: [SlideElement]) -> Int? {
         elements.compactMap { element -> Int? in
