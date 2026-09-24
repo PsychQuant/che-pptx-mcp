@@ -656,10 +656,14 @@ class PPTXMCPServer {
         let w = try extentEmu(args, "width", default: 3048000)
         let h = try extentEmu(args, "height", default: 2286000)
         guard let base64 = args["base64"]?.stringValue,
-              let fileName = args["file_name"]?.stringValue,
+              let requestedName = args["file_name"]?.stringValue,
               let data = Data(base64Encoded: base64) else {
             throw PPTXError.invalidParameter("base64", "Invalid base64 data")
         }
+        // Same rule as place_picture_at: pictures find their media by file
+        // name, so a reused name would point the new picture — and, on save,
+        // the old one — at the wrong bytes.
+        let fileName = uniqueMediaFileName(requestedName, in: pres)
 
         let nextId = try nextElementId(in: openPresentations[docId]!.slides[idx])
         appendPicture(docId: docId, slideIndex: idx, id: nextId, data: data, fileName: fileName,
