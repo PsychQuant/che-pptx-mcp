@@ -8,12 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `open_presentation` 開啟含音訊、影片或換場音效的簡報時，回應會列出是哪幾張投影片，並說明這份簡報可以讀取但無法存檔（PsychQuant/pptx-swift#5）。之前要等到 autosave 或 `save_presentation` 失敗才會發現。
 - CI 新增 `swift-test` job（#10）：在 `macos-latest` 上跑 `swift build` + `swift test`。先前 `.github/workflows/ci.yml` 只在 ubuntu-latest 跑 shellcheck 與 `scripts/tests/*.sh`（#4），`swift test` 從未在任何機器上跑過。2026-09 的 `macos-latest` 解析到 macOS 26（arm64，預設 Xcode 26.6），能建置本套件 `swift-tools-version: 5.9` 的 manifest；repo 公開，macOS runner 分鐘數不計費。
 - CI 新增 `actionlint` job（#10）：在 ubuntu-latest 靜態檢查 workflow 檔案本身。下載固定版本（v1.7.12）的官方 release 二進位並用官方 checksums 檔驗證 sha256，不用 `curl | bash` 抓可變的 `main` 分支腳本。
 
 ### Changed
 
 - 布林參數改用與 #5 整數參數相同的嚴格 JSON 型別規則（#10）：只接受 JSON 的 `true`／`false`，其餘一律回參數錯誤，命名該參數。缺少或明確的 JSON `null` 視同未提供、套用預設值 `false`（與 `optionalInt` 對整數參數的規則一致，不是本次新增的例外）。移除舊的 `Value.boolValue`——它會把字串 `"true"`／`"1"` 轉成 `true`，但因為 `.string(let s)` 這個 case 本身不會落到 `default: return nil`，**任何其他字串（包含字面上的 `"false"`）都被默默轉成 `false`**，不是回錯誤。受影響參數：`create_presentation`／`open_presentation` 的 `autosave`（目前僅有的兩個布林參數，已用逐一比對 schema 的測試鎖定「沒有漏掉任何布林參數」）。
+
+### Fixed
+
+- 升級 pptx-swift 0.4.0（PsychQuant/pptx-swift#5）：含群組（`p:grpSp`）的簡報存檔後，群組與其中的形狀、圖片、文字不再默默消失；外部連結圖片（`r:link`）會保留。
+
+### Changed
+
+- 升級 pptx-swift 0.4.0 帶來的行為變更：簡報含音訊、影片或換場音效時，`save_presentation` 與 autosave 會回錯誤（「投影片 N 含音訊、影片或換場音效…拒絕存檔」），不再存出播放能力已遺失的檔案。
 
 ## [0.3.0] - 2026-09-24
 

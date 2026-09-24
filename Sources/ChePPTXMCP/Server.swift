@@ -537,7 +537,19 @@ class PPTXMCPServer {
 
         let presentation = try PptxReader.read(from: URL(fileURLWithPath: path))
         initializeSession(docId: docId, presentation: presentation, sourcePath: path, autosave: autosave)
-        return "已開啟簡報: \(docId)（\(presentation.slideCount) 張投影片）"
+        let opened = "已開啟簡報: \(docId)（\(presentation.slideCount) 張投影片）"
+        guard let notice = Self.unsupportedMediaNotice(presentation) else { return opened }
+        return opened + "\n" + notice
+    }
+
+    /// pptx-swift 0.4.0 起，含音訊、影片或換場音效的簡報一律拒絕寫出
+    /// （PsychQuant/pptx-swift#5）。開檔當下就說清楚，不讓呼叫端編輯到存檔才發現。
+    static func unsupportedMediaNotice(_ presentation: Presentation) -> String? {
+        let slides = presentation.slides.indices
+            .filter { presentation.slides[$0].containsUnsupportedMedia }
+            .map { "第 \($0 + 1) 張" }
+        guard !slides.isEmpty else { return nil }
+        return "注意：\(slides.joined(separator: "、"))投影片含音訊、影片或換場音效。這些內容無法保留，因此這份簡報可以讀取與檢視，但無法存檔（save_presentation 與 autosave 都會失敗）。"
     }
 
     private func savePresentation(args: [String: Value]) throws -> String {
