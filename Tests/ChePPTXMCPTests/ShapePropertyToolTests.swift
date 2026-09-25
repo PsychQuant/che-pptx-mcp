@@ -15,6 +15,8 @@ import PPTXSwift
 /// - C1：圖片填色形狀引用 relationship，整份簡報無法存檔；`open_presentation`
 ///   要在開檔時就指出是哪張投影片的哪個元素，而用 `set_shape_fill` 換掉圖片填色
 ///   之後要能存檔。
+/// - L4：刪掉被連接線黏著的形狀後再插入新元素，新元素不得接手舊 id 上的連接線
+///   綁定。
 /// - L5：`set_placeholder_geometry` 移動自訂路徑形狀後，存檔的檔案仍保有路徑。
 @Suite(.serialized)
 struct ShapePropertyToolTests {
@@ -171,5 +173,64 @@ struct ShapePropertyToolTests {
                 "the custom path must be in the saved file")
         let off = try spPr.nodes(forXPath: "*[local-name()='xfrm']/*[local-name()='off']").first as? XMLElement
         #expect(off?.attribute(forName: "x")?.stringValue == "1800000")
+    }
+
+    // MARK: - L4: a deleted shape's id must not inherit its connector bindings
+
+    /// 形狀 id=10 是投影片上最大的 id，連接線 id=9 黏在它上面。刪掉 10 之後，
+    /// 最大 id 變成 9，新元素以前會拿到 10——連接線就靜默改黏到新元素上。
+    func installGluedSession(_ docId: String) {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [
+            .shape(Shape(id: 2, name: "Title", size: Size(width: 914400, height: 914400))),
+            .connector(Connector(id: 9, name: "Connector 1",
+                                 startConnection: ConnectionSite(shapeId: 2, index: 3),
+                                 endConnection: ConnectionSite(shapeId: 10, index: 1))),
+            .shape(Shape(id: 10, name: "Target", size: Size(width: 914400, height: 914400))),
+        ]
+        server.initializeSession(docId: docId, presentation: pres, sourcePath: nil, autosave: false)
+    }
+
+    func connectorEnds(_ docId: String) throws -> (start: Int?, end: Int?) {
+        let slide = try #require(server.openPresentations[docId]?.slides[0])
+        let connector = try #require(slide.elements.compactMap { element -> Connector? in
+            if case .connector(let c) = element { return c }
+            return nil
+        }.first)
+        return (connector.startConnection?.shapeId, connector.endConnection?.shapeId)
+    }
+
+    @Test func `Deleting a glued shape unbinds the connector so a new element does not inherit the binding`() async throws {
+        installGluedSession("glued")
+        let deleted = try await call("delete_shape", ["doc_id": .string("glued"), "slide_index": .int(0), "shape_id": .int(10)])
+        #expect(!deleted.isError, "\(deleted.text)")
+        #expect(try connectorEnds("glued").end == nil, "the connector end glued to the deleted shape must be released")
+        #expect(try connectorEnds("glued").start == 2, "the other end stays glued")
+
+        let inserted = try await call("insert_text_shape", [
+            "doc_id": .string("glued"), "slide_index": .int(0), "text": .string("New"),
+            "x": .int(0), "y": .int(0), "width": .int(914400), "height": .int(914400),
+        ])
+        let digits = inserted.text.split(separator: "=").last?.prefix { $0.isNumber } ?? ""
+        let newId = try #require(Int(digits), "no id in response: \(inserted.text)")
+        let ends = try connectorEnds("glued")
+        #expect(ends.start != newId && ends.end != newId, "the new element (id=\(newId)) must not be glued to the old connector")
+    }
+
+    /// 連接線已經指向一個不存在的 id（其他工具留下的懸空綁定）時，配號也要避開它。
+    @Test func `A new element never takes an id a connector still points at`() async throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [
+            .shape(Shape(id: 2, name: "Title")),
+            .connector(Connector(id: 9, name: "Dangling", endConnection: ConnectionSite(shapeId: 10, index: 0))),
+        ]
+        server.initializeSession(docId: "dangling", presentation: pres, sourcePath: nil, autosave: false)
+        let inserted = try await call("insert_text_shape", [
+            "doc_id": .string("dangling"), "slide_index": .int(0), "text": .string("New"),
+            "x": .int(0), "y": .int(0), "width": .int(914400), "height": .int(914400),
+        ])
+        let digits = inserted.text.split(separator: "=").last?.prefix { $0.isNumber } ?? ""
+        let newId = try #require(Int(digits), "no id in response: \(inserted.text)")
+        #expect(newId == 11, "id 10 is still referenced by the connector's endCxn")
     }
 }
