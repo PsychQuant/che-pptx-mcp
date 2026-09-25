@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `open_presentation` 開啟含「pptx-swift 無法安全保存」內容的簡報時，回應會逐一列出是哪張投影片的哪個元素、為什麼（PsychQuant/pptx-swift#12、#15），並說明改掉或刪除它們之後就能存檔。依 pptx-swift 0.6.0 的 `Presentation.writeBlockers` 判斷，涵蓋：形狀或群組的原樣填色／效果／`extLst` 引用了 relationship（例如圖片填色的形狀）、圖表／SmartArt／OLE 物件、引用 relationship 的未建模元素（墨跡等）。這類簡報在 0.6.0 之前存檔會靜默刪掉圖表，或讓圖片填色的形狀顯示成另一張圖；現在 `save_presentation` 會拒絕並指名元素。
+- `open_presentation` 開啟含「pptx-swift 無法安全保存」內容的簡報時，回應會逐一列出是哪張投影片的哪個元素、為什麼，以及用這個伺服器的工具走得通的補救方式（PsychQuant/pptx-swift#12、#15）。依 pptx-swift 0.6.0 的 `Presentation.writeBlockers` 判斷，涵蓋：形狀或群組的原樣填色／效果／`extLst` 引用了 relationship（例如圖片填色的形狀）、圖表／SmartArt／OLE 物件、引用 relationship 的未建模元素（墨跡等）。這類簡報在 0.6.0 之前存檔會靜默刪掉圖表，或讓圖片填色的形狀顯示成另一張圖；現在 `save_presentation` 與 autosave 會拒絕，錯誤訊息同樣列出元素與補救方式。補救方式依元素而定：頂層形狀的圖片填色可以用 `set_shape_fill` 換掉；圖表、SmartArt、OLE 物件與連接線只能 `delete_shape`；元素在群組裡時（`set_shape_fill`／`delete_shape` 都只看頂層元素），提示會指名所屬群組，目前只能刪除整個頂層群組（群組內其他元素一併刪除）。
+- 圖表、SmartArt、OLE 物件依 `graphicData/@uri` 以中文名稱描述（「圖表 id=30「Chart 1」」），不再只寫 `<graphicFrame>`；`get_slide_shapes` 的 `Raw(graphicFrame)` 一行也標出種類。對它們呼叫 `set_placeholder_geometry` 的錯誤訊息改成「id=30 是圖表，pptx-swift 沒有它的幾何模型，目前無法移動或縮放它」。
 
 ### Fixed
 
