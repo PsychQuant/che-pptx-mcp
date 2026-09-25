@@ -6,9 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-25
+
 ### Added
 
-- `open_presentation` 開啟含「pptx-swift 無法安全保存」內容的簡報時，回應會逐一列出是哪張投影片的哪個元素、為什麼，以及用這個伺服器的工具走得通的補救方式（PsychQuant/pptx-swift#12、#15）。依 pptx-swift 0.6.0 的 `Presentation.writeBlockers` 判斷，涵蓋：形狀或群組的原樣填色／效果／`extLst` 引用了 relationship（例如圖片填色的形狀）、圖表／SmartArt／OLE 物件、引用 relationship 的未建模元素（墨跡等）。這類簡報在 0.6.0 之前存檔會靜默刪掉圖表，或讓圖片填色的形狀顯示成另一張圖；現在 `save_presentation` 與 autosave 會拒絕，錯誤訊息同樣列出元素與補救方式。補救方式依元素而定：頂層形狀的圖片填色可以用 `set_shape_fill` 換掉；圖表、SmartArt、OLE 物件與連接線只能 `delete_shape`；元素在群組裡時（`set_shape_fill`／`delete_shape` 都只看頂層元素），提示會指名所屬群組，目前只能刪除整個頂層群組（群組內其他元素一併刪除）；被擋的是頂層群組自身時，同樣提醒刪除會連同子元素；元素沒有任何 id 時，照實說明這個伺服器沒有工具可以處理，要先用其他工具移除。
+- `open_presentation` 開啟含「pptx-swift 無法安全保存」內容的簡報時，回應會逐一列出是哪張投影片的哪個元素、為什麼，以及用這個伺服器的工具走得通的補救方式（PsychQuant/pptx-swift#12、PsychQuant/pptx-swift#15）。依 pptx-swift 0.6.0 的 `Presentation.writeBlockers` 判斷，涵蓋：形狀或群組的原樣填色／效果／`extLst` 引用了 relationship（例如圖片填色的形狀）、圖表／SmartArt／OLE 物件、引用 relationship 的未建模元素（墨跡等）。這類簡報在 0.6.0 之前存檔會靜默刪掉圖表，或讓圖片填色的形狀顯示成另一張圖；現在 `save_presentation` 與 autosave 會拒絕，錯誤訊息同樣列出元素與補救方式。補救方式依元素而定：頂層形狀的圖片填色可以用 `set_shape_fill` 換掉；圖表、SmartArt、OLE 物件與連接線只能 `delete_shape`；元素在群組裡時（`set_shape_fill`／`delete_shape` 都只看頂層元素），提示會指名所屬群組，目前只能刪除整個頂層群組（群組內其他元素一併刪除）；被擋的是頂層群組自身時，同樣提醒刪除會連同子元素；元素沒有任何 id 時，照實說明這個伺服器沒有工具可以處理，要先用其他工具移除。
 - 圖表、SmartArt、OLE 物件，以及包在 `mc:AlternateContent` 裡的表格，依 `graphicData/@uri` 以中文名稱描述（「圖表 id=30「Chart 1」」「表格 id=4」），不再只寫 `<graphicFrame>`；`get_slide_shapes` 的 `Raw(graphicFrame)` 一行也標出種類。對它們呼叫 `set_placeholder_geometry` 的錯誤訊息改成「id=30 是圖表，pptx-swift 沒有它的幾何模型，目前無法移動或縮放它」。
 
 ### Fixed
@@ -19,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- 升級 pptx-swift 至 0.6.0（PsychQuant/pptx-swift#9、#10）：`SlideElement` 新增 `.connector`（連接線／箭頭，`p:cxnSp`）與 `.raw`（`mc:AlternateContent`、`p:contentPart` 等未建模子元素的原始 XML passthrough）兩個 case。這是一次 breaking change——伺服器內每一處對 `SlideElement`做 exhaustive switch（沒有 `default:`）的既有程式碼都需要更新才能編譯，已全部更新：
+- 升級 pptx-swift 至 0.6.0（PsychQuant/pptx-swift#9、PsychQuant/pptx-swift#10）：`SlideElement` 新增 `.connector`（連接線／箭頭，`p:cxnSp`）與 `.raw`（`mc:AlternateContent`、`p:contentPart` 等未建模子元素的原始 XML passthrough）兩個 case。這是一次 breaking change——伺服器內每一處對 `SlideElement`做 exhaustive switch（沒有 `default:`）的既有程式碼都需要更新才能編譯，已全部更新：
   - `get_slide_shapes`：新增連接線（含起訖連接點 `stCxn`／`endCxn`）與未建模元素（顯示 `localName` 與所有 `cNvPr/@id`）各自的一行摘要，不再是「新元素類型出現就編譯失敗」或「悄悄從清單消失」。
   - `nextElementId`（新元素 id 配置，#6 的教訓）：改用 pptx-swift 新增的 `Slide.allElementIds`（遞迴涵蓋群組子孫與 `.raw` 元素內所有 id），取代原本手寫、逐 case 列舉的 `maxElementId(in:)`——手寫版本在 pptx-swift 新增 case 時會安靜漏看該 case 底下的 id，讓新插入的元素有機會撞號、蓋掉既有的連接線或未建模元素（che-pptx-mcp#10，#6 教訓的重演）；改用 pptx-swift 自己維護的 API 後，這類遺漏由上游負責保持窮舉，不必依賴下游每次都記得手動加 case。
   - `set_placeholder_geometry` 內部的 `topLevelGeometry`：連接線現在回傳其位置與大小（沿用 `Connector.position`／`size`，與形狀、圖片、表格框同一套 `a:xfrm`）；未建模元素沒有型別化幾何可回傳，回傳 `nil`（與既有的群組行為一致，不是新的限制——`Slide.setGeometry` 對 `.raw` 本來就會丟 `PPTXError.rawElementGeometryUnsupported`）。
