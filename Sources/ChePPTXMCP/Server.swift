@@ -546,8 +546,37 @@ class PPTXMCPServer {
         let presentation = try PptxReader.read(from: URL(fileURLWithPath: path))
         initializeSession(docId: docId, presentation: presentation, sourcePath: path, autosave: autosave)
         let opened = "已開啟簡報: \(docId)（\(presentation.slideCount) 張投影片）"
-        guard let notice = Self.unsupportedMediaNotice(presentation) else { return opened }
-        return opened + "\n" + notice
+        let notices = [Self.unsupportedMediaNotice(presentation), Self.unwritableContentNotice(presentation)].compactMap { $0 }
+        return ([opened] + notices).joined(separator: "\n")
+    }
+
+    /// pptx-swift 0.6.0 起，原樣保存的內容（形狀的圖片填色、圖表／SmartArt／OLE
+    /// 物件、墨跡……）若引用 relationship，整份簡報拒絕寫出（PsychQuant/pptx-swift
+    /// #9、#12、#15）。比照含音訊的簡報，開檔當下就逐一列出是哪張投影片的哪個元素，
+    /// 並說明改掉或刪掉它們之後就能存檔——拒絕是依目前狀態判斷，不是依原始檔案。
+    static func unwritableContentNotice(_ presentation: Presentation) -> String? {
+        let items = presentation.writeBlockers.compactMap { blocker -> String? in
+            if case .unsupportedMedia = blocker.reason { return nil }
+            var element = blocker.elementKind ?? "元素"
+            if let id = blocker.elementId { element += " id=\(id)" }
+            if let name = blocker.elementName, !name.isEmpty { element += "「\(name)」" }
+            let why: String
+            switch blocker.reason {
+            case .relationshipReference(let location, let attributes):
+                why = "\(location)引用了 relationship（\(attributes.joined(separator: "、"))）"
+            case .malformedPassthroughXML(let location):
+                why = "\(location)的原樣 XML 無法解析"
+            case .invalidPresetGeometry(let prst):
+                why = "預設幾何 prst=\"\(prst)\" 不是合法的形狀類型"
+            case .unsupportedMedia:
+                return nil
+            }
+            return "第 \(blocker.slideIndex + 1) 張投影片的\(element)：\(why)"
+        }
+        guard !items.isEmpty else { return nil }
+        return "注意：這份簡報目前無法存檔（save_presentation 與 autosave 都會失敗），因為下列內容 pptx-swift 無法安全保存：\n"
+            + items.map { "- " + $0 }.joined(separator: "\n")
+            + "\n改掉或刪除這些元素之後就能存檔（例如用 set_shape_fill 換掉形狀的圖片填色，或用 delete_shape 刪除該元素）。"
     }
 
     /// pptx-swift 0.4.0 起，含音訊、影片或換場音效的簡報一律拒絕寫出
