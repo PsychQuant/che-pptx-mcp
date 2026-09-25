@@ -211,6 +211,75 @@ struct ShapePropertyToolTests {
         #expect(moved.text.contains("圖表"), "the error must say it is a chart: \(moved.text)")
     }
 
+    // MARK: - R3: remedies and wording
+
+    /// 頂層群組自身的 `grpSpPr` 被擋時，刪除群組同樣會連同子元素一起刪除，補救
+    /// 文字要說清楚（R3 L-2'）。
+    @Test func `A blocked top-level group warns that deleting it deletes its children`() async throws {
+        let group = "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"92\" name=\"Filled group\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
+            + "<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"914400\" cy=\"914400\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"914400\" cy=\"914400\"/></a:xfrm>"
+            + "<a:blipFill><a:blip r:embed=\"rId2\"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:grpSpPr>"
+            + Self.gradientShape + "</p:grpSp>"
+        let deck = try Self.deck(group)
+        let opened = try await call("open_presentation", ["doc_id": .string("grp-self"), "path": .string(deck.path)])
+        #expect(opened.text.contains("群組 id=92"), "\(opened.text)")
+        #expect(opened.text.contains("delete_shape shape_id=92"), "\(opened.text)")
+        #expect(opened.text.contains("群組內其他元素會一併刪除"), "deleting a group deletes its children too: \(opened.text)")
+    }
+
+    /// 沒有任何 `cNvPr` 的未建模元素沒有 id 可刪；補救文字要照實說沒有工具可用，
+    /// 而不是給一個走不通的建議（R3 L-5'）。
+    @Test func `An unmodeled element without an id gets an honest remedy`() async throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.raw(RawSlideElement(
+            localName: "thing",
+            xml: "<x:thing xmlns:x=\"urn:example:thing\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"rId7\"/>",
+            elementIds: [], referencesRelationship: true))]
+        server.initializeSession(docId: "no-id", presentation: pres, sourcePath: nil, autosave: false)
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("no-id-\(UUID().uuidString).pptx")
+        let refused = try await call("save_presentation", ["doc_id": .string("no-id"), "path": .string(out.path)])
+        #expect(refused.isError)
+        #expect(refused.text.contains("沒有工具"), "the remedy must say no tool here can remove it: \(refused.text)")
+        #expect(!refused.text.contains("delete_shape"), "there is no id to pass to delete_shape: \(refused.text)")
+    }
+
+    static let oleFrame = "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"40\" name=\"Object 1\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>"
+        + "<p:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"914400\" cy=\"914400\"/></p:xfrm>"
+        + "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/presentationml/2006/ole\">"
+        + "<p:oleObj spid=\"_x0000_s1\" name=\"Worksheet\" r:id=\"rId9\" imgW=\"1\" imgH=\"1\" progId=\"Excel.Sheet.12\"><p:embed/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>"
+
+    @Test func `Chinese and Latin words in the notices are separated by a space`() async throws {
+        let deck = try Self.deck(Self.oleFrame)
+        let opened = try await call("open_presentation", ["doc_id": .string("ole-space"), "path": .string(deck.path)])
+        #expect(opened.text.contains("投影片的 OLE 內嵌物件 id=40"), "\(opened.text)")
+        #expect(opened.text.contains("無法保留 OLE 內嵌物件"), "\(opened.text)")
+        let moved = try await call("set_placeholder_geometry", [
+            "doc_id": .string("ole-space"), "slide_index": .int(0), "shape_id": .int(40),
+            "x_cm": .double(1), "y_cm": .double(1), "width_cm": .double(2), "height_cm": .double(2),
+        ])
+        #expect(moved.text.contains("id=40 是 OLE 內嵌物件"), "\(moved.text)")
+    }
+
+    /// R3 M-1'：審查者在真實檔案看到的「包在 mc:AlternateContent 裡的表格」。
+    @Test func `A table wrapped in mc colon AlternateContent is called a table`() async throws {
+        let cell = "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr><a:blipFill><a:blip r:embed=\"rId2\"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></a:tcPr></a:tc>"
+        let frame = "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"表格 3\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>"
+            + "<p:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"914400\" cy=\"914400\"/></p:xfrm>"
+            + "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblGrid><a:gridCol w=\"914400\"/></a:tblGrid>"
+            + "<a:tr h=\"370840\">" + cell + cell + "</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        let wrapped = "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+            + "<mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\">" + frame + "</mc:Choice>"
+            + "<mc:Fallback>" + frame + "</mc:Fallback></mc:AlternateContent>"
+        let deck = try Self.deck(wrapped)
+        let opened = try await call("open_presentation", ["doc_id": .string("ac-table"), "path": .string(deck.path)])
+        #expect(opened.text.contains("表格 id=4"), "\(opened.text)")
+        #expect(!opened.text.contains("圖表、SmartArt"), "\(opened.text)")
+        #expect(!opened.text.contains("另一個 part"), "\(opened.text)")
+        #expect(opened.text.contains("delete_shape shape_id=4"), "\(opened.text)")
+        let shapes = try await call("get_slide_shapes", ["doc_id": .string("ac-table"), "slide_index": .int(0)])
+        #expect(shapes.text.contains("ids=4 "), "each id once: \(shapes.text)")
+    }
+
     // MARK: - L5: set_placeholder_geometry keeps a custom path through a save
 
     @Test func `set_placeholder_geometry on a custom path shape keeps the path in the saved file`() async throws {
