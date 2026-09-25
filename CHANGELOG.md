@@ -6,8 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `open_presentation` 開啟含「pptx-swift 無法安全保存」內容的簡報時，回應會逐一列出是哪張投影片的哪個元素、為什麼（PsychQuant/pptx-swift#12、#15），並說明改掉或刪除它們之後就能存檔。依 pptx-swift 0.6.0 的 `Presentation.writeBlockers` 判斷，涵蓋：形狀或群組的原樣填色／效果／`extLst` 引用了 relationship（例如圖片填色的形狀）、圖表／SmartArt／OLE 物件、引用 relationship 的未建模元素（墨跡等）。這類簡報在 0.6.0 之前存檔會靜默刪掉圖表，或讓圖片填色的形狀顯示成另一張圖；現在 `save_presentation` 會拒絕並指名元素。
+
 ### Fixed
 
+- `set_shape_fill` 對讀進來的漸層、圖片填色形狀生效（PsychQuant/pptx-swift#12）。之前回報「已設定填色」，存檔後仍是原本的填色；根因在 pptx-swift（原樣填色的優先序高於 typed 填色），pptx-swift 0.6.0 把兩者合成單一值後修正，這裡補上端到端測試。對圖片填色的形狀呼叫 `set_shape_fill` 也會解除上一條的存檔限制。
+- `delete_shape` 刪掉被連接線黏著的形狀時，一併解除連接線指向它的端點（比照 PowerPoint），回應會說明解除了幾個端點；新元素的 id 配置也避開仍被連接線 `stCxn`／`endCxn` 引用的 id（PsychQuant/pptx-swift#9）。之前刪掉 id 最大的被黏形狀後再插入新元素，新元素會拿到同一個 id，連接線就靜默改黏到它身上。
 - 升級 pptx-swift 0.5.0（PsychQuant/pptx-swift#7）：旋轉或翻轉過的形狀、圖片、表格框與群組（`a:xfrm` 的 `rot`／`flipH`／`flipV`）存檔後保留，不再默默回到原狀。幾何工具（`set_placeholder_geometry`、`fit_picture_to_native_aspect`）只改位置與大小，不會清掉旋轉。
 
 ### Changed
