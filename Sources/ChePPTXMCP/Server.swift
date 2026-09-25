@@ -497,6 +497,14 @@ class PPTXMCPServer {
             case .picture(let p) where p.id == id: return i
             case .graphicFrame(let f) where f.id == id: return i
             case .group(let g) where g.id == id: return i
+            case .connector(let c) where c.id == id: return i
+            // A `.raw` element (mc:AlternateContent, p:contentPart, …) can
+            // bundle more than one cNvPr/@id (a Choice and a Fallback branch
+            // each declaring their own) — match any of them, not just a
+            // notional "first" id, so a delete/lookup by any of its ids finds
+            // it instead of misreporting "not found" for an id that really is
+            // on the slide (PsychQuant/pptx-swift#9, che-pptx-mcp#10).
+            case .raw(let r) where r.elementIds.contains(id): return i
             default: continue
             }
         }
@@ -650,6 +658,17 @@ class PPTXMCPServer {
                 lines.append("GraphicFrame id=\(f.id) name=\"\(f.name)\" \(tableInfo)")
             case .group(let g):
                 lines.append("Group id=\(g.id) name=\"\(g.name)\" elements=\(g.elements.count)")
+            case .connector(let c):
+                let st = c.startConnection.map { " stCxn=(shape:\($0.shapeId),idx:\($0.index))" } ?? ""
+                let end = c.endConnection.map { " endCxn=(shape:\($0.shapeId),idx:\($0.index))" } ?? ""
+                lines.append("Connector id=\(c.id) name=\"\(c.name)\" pos=(\(c.position.x),\(c.position.y)) size=(\(c.size.width)×\(c.size.height)) \(cmSummary(c.position, c.size))\(st)\(end)")
+            case .raw(let r):
+                // Unmodeled child (mc:AlternateContent, p:contentPart, …,
+                // PsychQuant/pptx-swift#9) — no typed content to summarize,
+                // but it must still show up: silently skipping it here would
+                // let a caller believe the slide has fewer elements than it
+                // really does (che-pptx-mcp#10).
+                lines.append("Raw(\(r.localName)) ids=\(r.elementIds.map(String.init).joined(separator: ",")) （未建模子元素，原始 XML 原樣保留，不支援讀取內容或編輯）")
             }
         }
         return lines.isEmpty ? "(empty slide)" : lines.joined(separator: "\n")
@@ -713,17 +732,23 @@ class PPTXMCPServer {
         return "已插入圖片: \(fileName) (id=\(nextId))"
     }
 
-    /// One more than the largest element id anywhere in the slide's shape
-    /// tree — group children included, so a new element can never share an id
-    /// with (and shadow) an element inside a group — and at least 2. Throws
-    /// when the largest id has already reached `maxDrawingElementId`
-    /// (`UInt32.max`), which also rules out `Int` overflow.
+    /// One more than the largest element id anywhere on the slide — group
+    /// children and unmodeled `.raw`/`.connector` ids included, so a new
+    /// element can never share an id with (and shadow) an element this
+    /// server does not itself render — and at least 2. Throws when the
+    /// largest id has already reached `maxDrawingElementId` (`UInt32.max`),
+    /// which also rules out `Int` overflow.
     ///
     /// The single id allocator for every tool that adds an element
     /// (`insert_image`, `place_picture_at`, `insert_text_shape`,
-    /// `insert_table` — #6).
+    /// `insert_table` — #6). Uses `Slide.allElementIds` (pptx-swift#9) rather
+    /// than a hand-rolled walk over `SlideElement`'s cases: a walk written
+    /// against one version's case list silently stops covering ids the
+    /// moment pptx-swift adds a new case (`.connector`/`.raw` were exactly
+    /// this — che-pptx-mcp#10, a repeat of #6's original lesson), whereas
+    /// `allElementIds` is pptx-swift's own responsibility to keep exhaustive.
     private func nextElementId(in slide: Slide) throws -> Int {
-        let maxId = max(maxElementId(in: slide.elements) ?? 1, 1)
+        let maxId = max(slide.allElementIds.max() ?? 1, 1)
         guard maxId < Self.maxDrawingElementId else {
             throw PPTXError.invalidParameter(
                 "shape_id",
@@ -736,17 +761,6 @@ class PPTXMCPServer {
     /// `p:cNvPr/@id` is `ST_DrawingElementId`, an `xsd:unsignedInt`: an id
     /// above this would make the saved file invalid (review round 1, HIGH 1).
     static let maxDrawingElementId = Int(UInt32.max)
-
-    private func maxElementId(in elements: [SlideElement]) -> Int? {
-        elements.compactMap { element -> Int? in
-            switch element {
-            case .shape(let s): return s.id
-            case .picture(let p): return p.id
-            case .graphicFrame(let f): return f.id
-            case .group(let g): return max(g.id, maxElementId(in: g.elements) ?? g.id)
-            }
-        }.max()
-    }
 
     /// Shared picture-insertion path (insert_image, place_picture_at): appends
     /// the picture element and its media part, linking the two by file name.
@@ -1408,7 +1422,12 @@ class PPTXMCPServer {
         case .shape(let s): return (s.position, s.size)
         case .picture(let p): return (p.position, p.size)
         case .graphicFrame(let f): return (f.position, f.size)
+        case .connector(let c): return (c.position, c.size)
         case .group: return nil
+        // A `.raw` element has no typed geometry to report — same reason
+        // `Slide.setGeometry` throws `rawElementGeometryUnsupported` for it
+        // rather than silently accepting a no-op write (pptx-swift#9).
+        case .raw: return nil
         }
     }
 

@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - 升級 pptx-swift 0.5.0（PsychQuant/pptx-swift#7）：旋轉或翻轉過的形狀、圖片、表格框與群組（`a:xfrm` 的 `rot`／`flipH`／`flipV`）存檔後保留，不再默默回到原狀。幾何工具（`set_placeholder_geometry`、`fit_picture_to_native_aspect`）只改位置與大小，不會清掉旋轉。
 
+### Changed
+
+- 升級 pptx-swift 至 0.6.0（PsychQuant/pptx-swift#9、#10）：`SlideElement` 新增 `.connector`（連接線／箭頭，`p:cxnSp`）與 `.raw`（`mc:AlternateContent`、`p:contentPart` 等未建模子元素的原始 XML passthrough）兩個 case。這是一次 breaking change——伺服器內每一處對 `SlideElement`做 exhaustive switch（沒有 `default:`）的既有程式碼都需要更新才能編譯，已全部更新：
+  - `get_slide_shapes`：新增連接線（含起訖連接點 `stCxn`／`endCxn`）與未建模元素（顯示 `localName` 與所有 `cNvPr/@id`）各自的一行摘要，不再是「新元素類型出現就編譯失敗」或「悄悄從清單消失」。
+  - `nextElementId`（新元素 id 配置，#6 的教訓）：改用 pptx-swift 新增的 `Slide.allElementIds`（遞迴涵蓋群組子孫與 `.raw` 元素內所有 id），取代原本手寫、逐 case 列舉的 `maxElementId(in:)`——手寫版本在 pptx-swift 新增 case 時會安靜漏看該 case 底下的 id，讓新插入的元素有機會撞號、蓋掉既有的連接線或未建模元素（che-pptx-mcp#10，#6 教訓的重演）；改用 pptx-swift 自己維護的 API 後，這類遺漏由上游負責保持窮舉，不必依賴下游每次都記得手動加 case。
+  - `set_placeholder_geometry` 內部的 `topLevelGeometry`：連接線現在回傳其位置與大小（沿用 `Connector.position`／`size`，與形狀、圖片、表格框同一套 `a:xfrm`）；未建模元素沒有型別化幾何可回傳，回傳 `nil`（與既有的群組行為一致，不是新的限制——`Slide.setGeometry` 對 `.raw` 本來就會丟 `PPTXError.rawElementGeometryUnsupported`）。
+  - `findElement`（`delete_shape`／`update_cell` 等工具共用的 id 查找）：新增比對連接線與未建模元素（後者比對其所有 id，不只第一個）。之前這兩類元素對 `findElement`完全不可見——`delete_shape` 傳入一個真實存在的連接線 id 只會得到「找不到」，讓使用者誤以為該元素不存在；現在能正確找到並刪除。
+
 ## [0.4.0] - 2026-09-24
 
 ### Added
