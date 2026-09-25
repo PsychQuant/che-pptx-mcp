@@ -90,6 +90,9 @@ class PPTXMCPServer {
         dirtyState[docId] = true
         if autosaveState[docId] == true, let path = originalPaths[docId], let pres = openPresentations[docId] {
             do {
+                if let refusal = Self.saveRefusalMessage(pres) {
+                    throw PPTXError.writeError(refusal)
+                }
                 try PptxWriter.write(pres, to: URL(fileURLWithPath: path))
                 dirtyState[docId] = false
             } catch {
@@ -490,6 +493,23 @@ class PPTXMCPServer {
         return nil
     }
 
+    /// 包含 `id` 的 `.raw` 元素（含群組內）。
+    static func rawElement(containing id: Int, in elements: [SlideElement]) -> RawSlideElement? {
+        for element in elements {
+            switch element {
+            case .raw(let raw) where raw.elementIds.contains(id): return raw
+            case .group(let group):
+                if let found = rawElement(containing: id, in: group.elements) { return found }
+            default: continue
+            }
+        }
+        return nil
+    }
+
+    static func rawElement(containing id: Int, in slide: Slide) -> RawSlideElement? {
+        rawElement(containing: id, in: slide.elements)
+    }
+
     private func findElement(in slide: Slide, id: Int) -> Int? {
         for (i, el) in slide.elements.enumerated() {
             switch el {
@@ -553,30 +573,51 @@ class PPTXMCPServer {
     /// pptx-swift 0.6.0 起，原樣保存的內容（形狀的圖片填色、圖表／SmartArt／OLE
     /// 物件、墨跡……）若引用 relationship，整份簡報拒絕寫出（PsychQuant/pptx-swift
     /// #9、#12、#15）。比照含音訊的簡報，開檔當下就逐一列出是哪張投影片的哪個元素，
-    /// 並說明改掉或刪掉它們之後就能存檔——拒絕是依目前狀態判斷，不是依原始檔案。
+    /// 以及用這個伺服器的工具**走得通**的補救方式——拒絕是依目前狀態判斷，改掉或
+    /// 刪掉之後就能存檔。
     static func unwritableContentNotice(_ presentation: Presentation) -> String? {
-        let items = presentation.writeBlockers.compactMap { blocker -> String? in
-            if case .unsupportedMedia = blocker.reason { return nil }
-            var element = blocker.elementKind ?? "元素"
-            if let id = blocker.elementId { element += " id=\(id)" }
-            if let name = blocker.elementName, !name.isEmpty { element += "「\(name)」" }
-            let why: String
-            switch blocker.reason {
-            case .relationshipReference(let location, let attributes):
-                why = "\(location)引用了 relationship（\(attributes.joined(separator: "、"))）"
-            case .malformedPassthroughXML(let location):
-                why = "\(location)的原樣 XML 無法解析"
-            case .invalidPresetGeometry(let prst):
-                why = "預設幾何 prst=\"\(prst)\" 不是合法的形狀類型"
-            case .unsupportedMedia:
-                return nil
-            }
-            return "第 \(blocker.slideIndex + 1) 張投影片的\(element)：\(why)"
-        }
+        let items = unwritableContentItems(presentation)
         guard !items.isEmpty else { return nil }
         return "注意：這份簡報目前無法存檔（save_presentation 與 autosave 都會失敗），因為下列內容 pptx-swift 無法安全保存：\n"
             + items.map { "- " + $0 }.joined(separator: "\n")
-            + "\n改掉或刪除這些元素之後就能存檔（例如用 set_shape_fill 換掉形狀的圖片填色，或用 delete_shape 刪除該元素）。"
+    }
+
+    /// 存檔（`save_presentation`／autosave）被 pptx-swift 拒絕時的錯誤訊息，內容與
+    /// 開檔提示相同（含補救方式）；沒有這類內容時為 nil（音訊／影片沿用 pptx-swift
+    /// 自己的訊息）。
+    static func saveRefusalMessage(_ presentation: Presentation) -> String? {
+        let items = unwritableContentItems(presentation)
+        guard !items.isEmpty else { return nil }
+        return "無法存檔：下列內容 pptx-swift 無法安全保存（檔案未寫出）：\n"
+            + items.map { "- " + $0 }.joined(separator: "\n")
+    }
+
+    /// 每個非媒體類的 `WriteBlocker` 一行：哪張投影片的哪個元素、為什麼、怎麼補救。
+    static func unwritableContentItems(_ presentation: Presentation) -> [String] {
+        presentation.writeBlockers.compactMap { blocker -> String? in
+            if case .unsupportedMedia = blocker.reason { return nil }
+            return "第 \(blocker.slideIndex + 1) 張投影片的\(blocker.elementDescription)：\(blocker.reasonDescription)。"
+                + remedy(for: blocker)
+        }
+    }
+
+    /// 這個伺服器的工具能做到的補救。`set_shape_fill`／`delete_shape` 都只看投影片
+    /// 頂層的元素，所以群組內的元素只能刪除整個頂層群組（PsychQuant/pptx-swift#12
+    /// 審查 R2 M-1）；`set_shape_fill` 只能換頂層形狀的**填色**，不接受連接線、
+    /// 群組、圖表，也改不到效果或 extLst 裡的引用。
+    static func remedy(for blocker: WriteBlocker) -> String {
+        guard let topId = blocker.topLevelElementId else { return "" }
+        if !blocker.enclosingGroupIds.isEmpty {
+            return "它在群組裡，這個伺服器的工具碰不到群組內的元素，目前只能刪除整個群組 id=\(topId)（delete_shape shape_id=\(topId)，群組內其他元素會一併刪除）。"
+        }
+        switch (blocker.element, blocker.reason) {
+        case (.shape?, .relationshipReference(.fill, _)), (.shape?, .malformedPassthroughXML(.fill, _)):
+            return "可以用 set_shape_fill（shape_id=\(topId)）換成純色填色，或用 delete_shape 刪除它。"
+        case (.embeddedObject(let kind)?, _):
+            return "pptx-swift 目前無法保留\(kind.displayName)（PsychQuant/pptx-swift#16），只能刪除它（delete_shape shape_id=\(topId)）。"
+        default:
+            return "目前只能刪除它（delete_shape shape_id=\(topId)）。"
+        }
     }
 
     /// pptx-swift 0.4.0 起，含音訊、影片或換場音效的簡報一律拒絕寫出
@@ -606,6 +647,9 @@ class PPTXMCPServer {
             throw PPTXError.invalidParameter("path", "需要指定儲存路徑")
         }
 
+        if let refusal = Self.saveRefusalMessage(presentation) {
+            throw PPTXError.writeError(refusal)
+        }
         try PptxWriter.write(presentation, to: URL(fileURLWithPath: path))
         originalPaths[docId] = path
         dirtyState[docId] = false
@@ -697,7 +741,8 @@ class PPTXMCPServer {
                 // but it must still show up: silently skipping it here would
                 // let a caller believe the slide has fewer elements than it
                 // really does (che-pptx-mcp#10).
-                lines.append("Raw(\(r.localName)) ids=\(r.elementIds.map(String.init).joined(separator: ",")) （未建模子元素，原始 XML 原樣保留，不支援讀取內容或編輯）")
+                let what = r.embeddedObjectKind.map { "\($0.displayName)，" } ?? ""
+                lines.append("Raw(\(r.localName)) ids=\(r.elementIds.map(String.init).joined(separator: ",")) （\(what)未建模子元素，原始 XML 原樣保留，不支援讀取內容或編輯）")
             }
         }
         return lines.isEmpty ? "(empty slide)" : lines.joined(separator: "\n")
@@ -1099,7 +1144,16 @@ class PPTXMCPServer {
         let h = try requiredCm(args, "height_cm")
 
         var slide = pres.slides[idx]
-        try slide.setGeometry(ofElementId: shapeId, xCm: x, yCm: y, widthCm: w, heightCm: h)
+        do {
+            try slide.setGeometry(ofElementId: shapeId, xCm: x, yCm: y, widthCm: w, heightCm: h)
+        } catch PPTXError.rawElementGeometryUnsupported {
+            // 說出這是什麼東西（圖表、SmartArt、OLE 物件……），而不是只講 XML 標籤
+            // （PsychQuant/pptx-swift#12 審查 R2 L-6）。
+            let what = Self.rawElement(containing: shapeId, in: slide)?.embeddedObjectKind?.displayName ?? "pptx-swift 未建模的內容"
+            throw PPTXError.invalidParameter(
+                "shape_id", "id=\(shapeId) 是\(what)，pptx-swift 沒有它的幾何模型，目前無法移動或縮放它"
+            )
+        }
         guard let (position, size) = topLevelGeometry(of: shapeId, in: slide) else {
             throw PPTXError.invalidParameter("shape_id", "找不到形狀 id=\(shapeId)")
         }

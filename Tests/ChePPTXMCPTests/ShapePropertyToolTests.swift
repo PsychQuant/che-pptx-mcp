@@ -150,6 +150,67 @@ struct ShapePropertyToolTests {
         #expect(!opened.text.contains("無法存檔"), "\(opened.text)")
     }
 
+    // MARK: - R2 M-1 / L-6: the remedy the notice gives must be one the tools can carry out
+
+    /// 審查者的 `probe_grouped.pptx` 情境：圖片填色形狀 id=21 包在群組 id=90 裡。
+    /// `set_shape_fill`／`delete_shape` 只看頂層元素，找不到 id=21——提示要指名
+    /// 群組，並給唯一走得通的補救：刪除整個群組。
+    static let groupedPictureFill = "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"90\" name=\"Group 90\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
+        + "<p:grpSpPr><a:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"1828800\" cy=\"914400\"/><a:chOff x=\"914400\" y=\"914400\"/><a:chExt cx=\"1828800\" cy=\"914400\"/></a:xfrm></p:grpSpPr>"
+        + pictureFilledShape + "</p:grpSp>"
+
+    @Test func `A blocker inside a group names the group and only suggests deleting the whole group`() async throws {
+        let deck = try Self.deck(Self.groupedPictureFill)
+        let out = deck.deletingLastPathComponent().appendingPathComponent("out-grouped.pptx")
+        let opened = try await call("open_presentation", ["doc_id": .string("grouped"), "path": .string(deck.path)])
+        #expect(opened.text.contains("群組 id=90 內的形狀 id=21"), "the notice must say which group: \(opened.text)")
+        #expect(opened.text.contains("刪除整個群組 id=90"), "the only remedy the tools support is deleting the group: \(opened.text)")
+        #expect(!opened.text.contains("set_shape_fill"), "set_shape_fill cannot reach a shape inside a group: \(opened.text)")
+
+        let refused = try await call("save_presentation", ["doc_id": .string("grouped"), "path": .string(out.path)])
+        #expect(refused.isError)
+        #expect(refused.text.contains("群組 id=90 內的形狀 id=21"), "the save error must say which group too: \(refused.text)")
+        #expect(refused.text.contains("刪除整個群組 id=90"), "\(refused.text)")
+
+        let deleted = try await call("delete_shape", ["doc_id": .string("grouped"), "slide_index": .int(0), "shape_id": .int(90)])
+        #expect(!deleted.isError, "\(deleted.text)")
+        let saved = try await call("save_presentation", ["doc_id": .string("grouped"), "path": .string(out.path)])
+        #expect(!saved.isError, "\(saved.text)")
+    }
+
+    /// 連接線的原樣片段擋住存檔時，`set_shape_fill` 不接受連接線，不能建議它。
+    @Test func `A connector blocker does not suggest set_shape_fill`() async throws {
+        let connector = "<p:cxnSp><p:nvCxnSpPr><p:cNvPr id=\"23\" name=\"Arrow\"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>"
+            + "<p:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"914400\" cy=\"0\"/></a:xfrm><a:prstGeom prst=\"line\"><a:avLst/></a:prstGeom>"
+            + "<a:effectDag><a:fillOverlay blend=\"over\"><a:blipFill><a:blip r:embed=\"rId2\"/></a:blipFill></a:fillOverlay></a:effectDag></p:spPr></p:cxnSp>"
+        let deck = try Self.deck(connector)
+        let opened = try await call("open_presentation", ["doc_id": .string("conn-block"), "path": .string(deck.path)])
+        #expect(opened.text.contains("連接線 id=23"), "\(opened.text)")
+        #expect(!opened.text.contains("set_shape_fill"), "set_shape_fill does not accept connectors: \(opened.text)")
+        #expect(opened.text.contains("delete_shape"), "\(opened.text)")
+    }
+
+    static let chartFrame = "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"30\" name=\"Chart 1\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>"
+        + "<p:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"4572000\" cy=\"2743200\"/></p:xfrm>"
+        + "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">"
+        + "<c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" r:id=\"rId9\"/></a:graphicData></a:graphic></p:graphicFrame>"
+
+    @Test func `A chart is described as a chart, and moving it explains why it cannot be moved`() async throws {
+        let deck = try Self.deck(Self.chartFrame)
+        let opened = try await call("open_presentation", ["doc_id": .string("chart"), "path": .string(deck.path)])
+        #expect(opened.text.contains("圖表 id=30"), "\(opened.text)")
+        #expect(!opened.text.contains("<graphicFrame>"), "\(opened.text)")
+        #expect(!opened.text.contains("set_shape_fill"), "\(opened.text)")
+        #expect(opened.text.contains("delete_shape shape_id=30"), "\(opened.text)")
+
+        let moved = try await call("set_placeholder_geometry", [
+            "doc_id": .string("chart"), "slide_index": .int(0), "shape_id": .int(30),
+            "x_cm": .double(1), "y_cm": .double(1), "width_cm": .double(2), "height_cm": .double(2),
+        ])
+        #expect(moved.isError)
+        #expect(moved.text.contains("圖表"), "the error must say it is a chart: \(moved.text)")
+    }
+
     // MARK: - L5: set_placeholder_geometry keeps a custom path through a save
 
     @Test func `set_placeholder_geometry on a custom path shape keeps the path in the saved file`() async throws {
