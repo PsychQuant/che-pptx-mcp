@@ -596,8 +596,8 @@ class PPTXMCPServer {
     static func unwritableContentItems(_ presentation: Presentation) -> [String] {
         presentation.writeBlockers.compactMap { blocker -> String? in
             if case .unsupportedMedia = blocker.reason { return nil }
-            return "第 \(blocker.slideIndex + 1) 張投影片的\(blocker.elementDescription)：\(blocker.reasonDescription)。"
-                + remedy(for: blocker)
+            return WriteBlocker.cjkJoined("第 \(blocker.slideIndex + 1) 張投影片的", blocker.elementDescription)
+                + "：\(blocker.reasonDescription)。" + remedy(for: blocker)
         }
     }
 
@@ -606,15 +606,22 @@ class PPTXMCPServer {
     /// 審查 R2 M-1）；`set_shape_fill` 只能換頂層形狀的**填色**，不接受連接線、
     /// 群組、圖表，也改不到效果或 extLst 裡的引用。
     static func remedy(for blocker: WriteBlocker) -> String {
-        guard let topId = blocker.topLevelElementId else { return "" }
+        guard let topId = blocker.topLevelElementId else {
+            // 沒有任何 cNvPr 的未建模元素：沒有 id 可以交給 delete_shape（R3 L-5'）。
+            return "它沒有元素 id，這個伺服器目前沒有工具可以刪除或修改它；要先用 PowerPoint 等其他工具移除它，這份簡報才能存檔。"
+        }
         if !blocker.enclosingGroupIds.isEmpty {
             return "它在群組裡，這個伺服器的工具碰不到群組內的元素，目前只能刪除整個群組 id=\(topId)（delete_shape shape_id=\(topId)，群組內其他元素會一併刪除）。"
         }
         switch (blocker.element, blocker.reason) {
         case (.shape?, .relationshipReference(.fill, _)), (.shape?, .malformedPassthroughXML(.fill, _)):
             return "可以用 set_shape_fill（shape_id=\(topId)）換成純色填色，或用 delete_shape 刪除它。"
+        case (.group?, _):
+            // 被擋的是頂層群組自身（grpSpPr）：刪除它同樣會帶走子元素（R3 L-2'）。
+            return "目前只能刪除這個群組（delete_shape shape_id=\(topId)，群組內其他元素會一併刪除）。"
         case (.embeddedObject(let kind)?, _):
-            return "pptx-swift 目前無法保留\(kind.displayName)（PsychQuant/pptx-swift#16），只能刪除它（delete_shape shape_id=\(topId)）。"
+            return WriteBlocker.cjkJoined("pptx-swift 目前無法保留", kind.displayName)
+                + "（PsychQuant/pptx-swift#16），只能刪除它（delete_shape shape_id=\(topId)）。"
         default:
             return "目前只能刪除它（delete_shape shape_id=\(topId)）。"
         }
@@ -1151,7 +1158,7 @@ class PPTXMCPServer {
             // （PsychQuant/pptx-swift#12 審查 R2 L-6）。
             let what = Self.rawElement(containing: shapeId, in: slide)?.embeddedObjectKind?.displayName ?? "pptx-swift 未建模的內容"
             throw PPTXError.invalidParameter(
-                "shape_id", "id=\(shapeId) 是\(what)，pptx-swift 沒有它的幾何模型，目前無法移動或縮放它"
+                "shape_id", WriteBlocker.cjkJoined("id=\(shapeId) 是", what) + "，pptx-swift 沒有它的幾何模型，目前無法移動或縮放它"
             )
         }
         guard let (position, size) = topLevelGeometry(of: shapeId, in: slide) else {
