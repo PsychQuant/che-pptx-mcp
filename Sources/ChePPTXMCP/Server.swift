@@ -776,8 +776,15 @@ class PPTXMCPServer {
     /// moment pptx-swift adds a new case (`.connector`/`.raw` were exactly
     /// this — che-pptx-mcp#10, a repeat of #6's original lesson), whereas
     /// `allElementIds` is pptx-swift's own responsibility to keep exhaustive.
+    ///
+    /// Also stays above every id a connector's `stCxn`/`endCxn` still points
+    /// at (`Slide.connectionTargetIds`): `delete_shape` releases the bindings
+    /// of what it deletes, but a file can already carry a binding to an id no
+    /// element uses (left by another tool, or by content pptx-swift passes
+    /// through untouched); a new element taking that id would silently become
+    /// the connector's endpoint (PsychQuant/pptx-swift#12 review L4).
     private func nextElementId(in slide: Slide) throws -> Int {
-        let maxId = max(slide.allElementIds.max() ?? 1, 1)
+        let maxId = max((slide.allElementIds + slide.connectionTargetIds).max() ?? 1, 1)
         guard maxId < Self.maxDrawingElementId else {
             throw PPTXError.invalidParameter(
                 "shape_id",
@@ -1009,9 +1016,16 @@ class PPTXMCPServer {
         guard let elIdx = findElement(in: openPresentations[docId]!.slides[idx], id: shapeId) else {
             throw PPTXError.invalidParameter("shape_id", "找不到 id=\(shapeId)")
         }
-        openPresentations[docId]?.slides[idx].elements.remove(at: elIdx)
+        // 連接線的 stCxn／endCxn 綁的是 id，不是形狀本身：刪掉形狀之後綁定仍指著
+        // 那個 id，之後新元素一旦拿到同一個 id，連接線就會靜默改黏到它身上
+        // （PsychQuant/pptx-swift#12 審查 L4）。比照 PowerPoint，刪除時一併解除
+        // 指向被刪元素（群組則含所有子孫）的綁定，連接線本身與其幾何保留。
+        let removed = openPresentations[docId]!.slides[idx].elements.remove(at: elIdx)
+        let detached = openPresentations[docId]!.slides[idx].detachConnections(from: Set(removed.allElementIds))
         markDirty(docId)
-        return "已刪除形狀 id=\(shapeId)"
+        return detached == 0
+            ? "已刪除形狀 id=\(shapeId)"
+            : "已刪除形狀 id=\(shapeId)（並解除 \(detached) 個連接線端點的綁定）"
     }
 
     private func setShapePosition(args: [String: Value]) throws -> String {
